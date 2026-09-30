@@ -30,6 +30,7 @@ fs.writeFileSync(path.join(bin, "curl"), [
   "  limited) printf '{\"detail\":{\"error\":\"too many\",\"status_code\":429,\"retry_after\":\"3600\"}}\\n429' ;;",
   "  notoken) printf '{\"agent_id\":\"agt_1\"}\\n200' ;;",
   "  down) exit 7 ;;",
+  "  upload) cat > \"$FAKE_STDIN\"; printf '{\"data\":{\"type\":\"analysis\",\"id\":\"YWJj\"}}\\n200' ;;",
   "esac"
 ].join("\n"), { mode: 0o755 })
 fs.writeFileSync(path.join(bin, "omarchy-notification-send"),
@@ -59,7 +60,8 @@ function test(name, fn) {
 }
 
 test("scripts parse", shell => {
-  for (const name of ["startup", "credentialCheck", "dirCheck", "removeFile", "openUrl", "register", "hash", "notify"]) {
+  for (const name of ["startup", "credentialCheck", "dirCheck", "removeFile", "openUrl", "register", "hash", "notify",
+                      "probePlugins", "hashPlugin", "saveApiKey", "classicUpload"]) {
     const r = childProcess.spawnSync(shell, ["-n", "-c", S[name]], { encoding: "utf8" })
     assert.strictEqual(r.status, 0, name + ": " + r.stderr)
   }
@@ -157,6 +159,8 @@ test("startup creates private dirs and reports state", shell => {
   assert.strictEqual(r.code, 0, r.err)
   assert.ok(/^missing=$/m.test(r.out), r.out)
   assert.ok(/^auth=missing$/m.test(r.out))
+  assert.ok(/^apikey=missing$/m.test(r.out))
+  assert.ok(/^scanmissing=$/m.test(r.out), r.out)
   assert.ok(/^downloads=\$HOME\/Descargas$/m.test(r.out), r.out)
   assert.strictEqual(mode(cfg), "700")
   assert.strictEqual(mode(state), "700")
@@ -164,6 +168,10 @@ test("startup creates private dirs and reports state", shell => {
   r = run(shell, S.startup, [cfg, state, auth, path.join(base, "nope")])
   assert.ok(/^auth=present$/m.test(r.out))
   assert.ok(/^downloads=$/m.test(r.out))
+  const key = path.join(base, "vt-apikey.header")
+  fs.writeFileSync(key, "x-apikey: k\n")
+  r = run(shell, S.startup, [cfg, state, auth, dirs, key])
+  assert.ok(/^apikey=present$/m.test(r.out))
 })
 
 test("credential check", shell => {
@@ -232,6 +240,133 @@ test("notify finds the notifier under the injected Omarchy path", shell => {
   assert.strictEqual(r.code, 0, r.err)
   assert.ok(fs.existsSync(log), "notifier from $6 was not used")
   assert.strictEqual(fs.readFileSync(log, "utf8").split("\n")[3], "low")
+})
+
+// --- installed-plugin scanner ------------------------------------------------
+
+const hasGit = childProcess.spawnSync("git", ["--version"]).status === 0
+function sha256(text) { return crypto.createHash("sha256").update(text).digest("hex") }
+
+function makePlugins(base) {
+  fs.rmSync(base, { recursive: true, force: true })
+  const clock = path.join(base, "io.github.x.clock")
+  fs.mkdirSync(path.join(clock, "sub dir"), { recursive: true })
+  fs.writeFileSync(path.join(clock, "manifest.json"), "{\n  \"id\": \"io.github.x.clock\",\n  \"name\": \"Clock\",\n  \"version\": \"1.2.0\",\n  \"barWidget\": { \"name\": \"nested\" }\n}\n")
+  fs.writeFileSync(path.join(clock, "BarWidget.qml"), "Item {}\n")
+  fs.writeFileSync(path.join(clock, "sub dir", "a b;c.js"), "var x = 1\n")
+  fs.writeFileSync(path.join(clock, "empty"), "")
+  fs.writeFileSync(path.join(clock, "bad\nname.sh"), "echo hi\n")
+  fs.symlinkSync("/etc/passwd", path.join(clock, "link-to-passwd"))
+  fs.mkdirSync(path.join(clock, ".git"))
+  fs.writeFileSync(path.join(clock, ".git", "config"), "not scanned\n")
+  const other = path.join(base, "plain plugin")
+  fs.mkdirSync(other)
+  fs.writeFileSync(path.join(other, "Panel.qml"), "Panel {}\n")
+  fs.writeFileSync(path.join(base, "not-a-dir"), "x")
+  const dev = path.join(base, "..", path.basename(base) + "-dev")
+  fs.rmSync(dev, { recursive: true, force: true })
+  fs.mkdirSync(dev)
+  fs.writeFileSync(path.join(dev, "Service.qml"), "Item {}\n")
+  fs.symlinkSync(dev, path.join(base, "dev.linked"))
+  return { clock, other, dev }
+}
+
+test("probePlugins lists plugin folders with a change stamp", shell => {
+  const base = path.join(tmp, shell + "-plugins")
+  const p = makePlugins(base)
+  let r = run(shell, S.probePlugins, [base])
+  assert.strictEqual(r.code, 0, r.err)
+  const rows = r.out.trim().split("\n").map(l => l.split("\t"))
+  const byId = {}
+  for (const row of rows) byId[row[0]] = row
+  assert.deepStrictEqual(Object.keys(byId).sort(), ["dev.linked", "io.github.x.clock", "plain plugin"])
+  const clock = byId["io.github.x.clock"]
+  assert.strictEqual(clock[3], "1.2.0")
+  assert.strictEqual(clock[4], "Clock", "top-level name, not the nested one")
+  assert.strictEqual(clock[5], "dir")
+  assert.ok(/^5 \d+ \d+$/.test(clock[2]), "counts regular files outside .git: " + clock[2])
+  assert.strictEqual(byId["dev.linked"][5], "link")
+  assert.strictEqual(byId["dev.linked"][2].split(" ")[0], "1", "follows the top-level symlink")
+  const before = clock[2]
+  fs.writeFileSync(path.join(p.clock, "BarWidget.qml"), "Item { id: changed }\n")
+  r = run(shell, S.probePlugins, [base])
+  const after = r.out.split("\n").find(l => l.startsWith("io.github.x.clock\t")).split("\t")[2]
+  assert.notStrictEqual(after, before, "stamp changes when a file changes")
+  assert.strictEqual(run(shell, S.probePlugins, [path.join(tmp, "no-such-dir")]).code, 3)
+})
+
+test("probePlugins reports the git commit", shell => {
+  if (!hasGit) return
+  const base = path.join(tmp, shell + "-gitplugins")
+  fs.rmSync(base, { recursive: true, force: true })
+  const repo = path.join(base, "io.github.x.git")
+  fs.mkdirSync(repo, { recursive: true })
+  fs.writeFileSync(path.join(repo, "manifest.json"), "{\"id\":\"io.github.x.git\"}\n")
+  const g = args => childProcess.spawnSync("git", args, { cwd: repo, encoding: "utf8",
+    env: Object.assign({}, process.env, { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" }) })
+  g(["init", "-q"]); g(["add", "."]); g(["commit", "-qm", "init"])
+  const head = g(["rev-parse", "HEAD"]).stdout.trim()
+  const r = run(shell, S.probePlugins, [base])
+  assert.strictEqual(r.out.split("\t")[1], head)
+})
+
+test("hashPlugin hashes regular files only", shell => {
+  const base = path.join(tmp, shell + "-hplugins")
+  const p = makePlugins(base)
+  const r = run(shell, S.hashPlugin, [p.clock, "100"])
+  assert.strictEqual(r.code, 0, r.err)
+  const lines = r.out.trim().split("\n")
+  assert.strictEqual(lines[0], "#\t3\t1", "3 hashable files, 1 skipped for a newline in its name")
+  const got = {}
+  for (const l of lines.slice(1)) {
+    const [h, size, rel] = l.split("\t")
+    got[rel] = [h, Number(size)]
+  }
+  assert.deepStrictEqual(Object.keys(got).sort(), ["BarWidget.qml", "manifest.json", "sub dir/a b;c.js"])
+  assert.deepStrictEqual(got["sub dir/a b;c.js"], [sha256("var x = 1\n"), 10])
+  const capped = run(shell, S.hashPlugin, [p.clock, "1"]).out.trim().split("\n")
+  assert.strictEqual(capped.length, 2, "header + max files")
+  assert.strictEqual(run(shell, S.hashPlugin, [path.join(tmp, "missing-plugin"), "5"]).code, 3)
+})
+
+test("saveApiKey reads the key from stdin into a private header file", shell => {
+  const dir = path.join(tmp, shell + "-key", "omarchy-virustotal")
+  const file = path.join(dir, "vt-apikey.header")
+  fs.rmSync(path.dirname(dir), { recursive: true, force: true })
+  const key = "a1".repeat(32)
+  const runIn = input => childProcess.spawnSync(shell, ["-c", S.saveApiKey, "sh", dir, file],
+    { input: input, encoding: "utf8", env: { PATH: process.env.PATH } })
+  let r = runIn(" " + key + " \r\n")
+  assert.strictEqual(r.status, 0, r.stderr)
+  assert.strictEqual(fs.readFileSync(file, "utf8"), "x-apikey: " + key + "\n")
+  assert.strictEqual(mode(file), "600")
+  assert.strictEqual(mode(dir), "700")
+  r = runIn("b2".repeat(32))
+  assert.strictEqual(r.status, 0, "replaces an existing key (no trailing newline)")
+  assert.strictEqual(fs.readFileSync(file, "utf8"), "x-apikey: " + "b2".repeat(32) + "\n")
+  for (const bad of ["", "short", "g".repeat(64) + "$(touch pwned)", "z".repeat(63) + ";", "a".repeat(65)]) {
+    assert.strictEqual(runIn(bad + "\n").status, 2, "rejects " + JSON.stringify(bad))
+  }
+  assert.strictEqual(fs.readFileSync(file, "utf8"), "x-apikey: " + "b2".repeat(32) + "\n")
+  assert.deepStrictEqual(fs.readdirSync(dir), ["vt-apikey.header"])
+  assert.ok(!fs.existsSync(path.join(tmp, "pwned")))
+})
+
+test("classicUpload sends the file on stdin with the key header file", shell => {
+  const f = path.join(tmp, shell + " sample;type=text,x.sh")
+  fs.writeFileSync(f, "#!/bin/sh\necho payload\n")
+  const stdinFile = path.join(tmp, shell + "-stdin")
+  const r = run(shell, S.classicUpload, [f, "/cfg/vt-apikey.header", "https://www.virustotal.com/api/v3/files", "ua/1", "30"],
+    { FAKE_CURL_MODE: "upload", FAKE_STDIN: stdinFile })
+  assert.strictEqual(r.code, 0, r.err)
+  assert.ok(/"id":"YWJj"}}\n200$/.test(r.out), r.out)
+  assert.strictEqual(fs.readFileSync(stdinFile, "utf8"), "#!/bin/sh\necho payload\n")
+  const argv = fs.readFileSync(path.join(tmp, "log"), "utf8").split("\n")
+  assert.ok(argv.includes("@/cfg/vt-apikey.header"))
+  assert.ok(argv.includes("file=@-;filename=sample"))
+  assert.ok(!argv.some(a => a.indexOf("sample;type") >= 0), "local path never reaches curl argv")
+  assert.strictEqual(argv[argv.indexOf("--max-time") + 1], "30")
+  assert.strictEqual(run(shell, S.classicUpload, [path.join(tmp, "nope"), "h", "u", "a", "1"]).code, 3)
 })
 
 fs.rmSync(tmp, { recursive: true, force: true })

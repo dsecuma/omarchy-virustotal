@@ -4,7 +4,7 @@
   "name": "VirusTotal",
   "version": "1.0.0",
   "author": "David Santos",
-  "description": "Community plugin that checks URLs, domains, IPs, hashes and files against VirusTotal from the Omarchy bar, with an optional watcher for new downloads. Uses the VirusTotal AI API; files are only uploaded after you confirm.",
+  "description": "Community plugin that checks URLs, domains, IPs, hashes and files against VirusTotal from the Omarchy bar, with optional watchers for new downloads and for new or updated Omarchy plugins. Uses the VirusTotal AI API or your own API key; files are only uploaded after you confirm.",
   "kinds": [
     "bar-widget",
     "service"

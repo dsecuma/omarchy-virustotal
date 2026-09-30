@@ -5,7 +5,8 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// VirusTotal panel: lookups, consented uploads, history and settings.
+// VirusTotal panel: lookups, consented uploads, history, installed-plugin
+// checks (PluginsTab.qml) and settings.
 //
 // All state and I/O live in Service.qml; BarWidget.qml injects it as
 // `service`. This file renders that state and forwards user actions. Every
@@ -19,13 +20,14 @@ Panel {
   property var hostWidget: null
   property var service: null
 
-  // scan | history | settings
+  // scan | history | plugins | settings
   property string tab: "scan"
-  // upload | disconnect | clear, or "" when no dialog is open
+  // upload | disconnect | clear | autoUpload, or "" when no dialog is open
   property string confirmPurpose: ""
   property string _confirmSha: ""
   property int historyIndex: 0
   property int settingsIndex: 0
+  property int pluginsIndex: 0
   property bool cursorActive: false
   property real now: Date.now()
   property var _notifiedService: null
@@ -50,7 +52,12 @@ Panel {
   readonly property bool showStatusAction: !!result && connected
     && ((result.status === "analyzing" && !tracking) || result.status === "unknown_submission")
   readonly property bool showAgainAction: tracking && !!service && service.analysisStalled === true
-  readonly property var tabs: ["scan", "history", "settings"]
+  readonly property var tabs: ["scan", "history", "plugins", "settings"]
+  readonly property var scanner: service ? service.scanner : null
+  readonly property var pluginRows: scanner && scanner.plugins ? scanner.plugins : []
+  // Fields that consume Return/arrows themselves; the key catcher stands down.
+  readonly property bool fieldFocused: searchField.activeFocus || apiKeyField.activeFocus
+    || parallelField.field.activeFocus || perMinField.field.activeFocus || perDayField.field.activeFocus
   readonly property var settingsItems: computeSettingsItems()
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -78,8 +85,10 @@ Panel {
     if (s.connecting) return "Connecting\u2026"
     if (s.credentialState === "missing") return "Not connected"
     if (s.credentialState === "invalid") return "Token rejected"
-    if (s.watcherActive) return "Connected \u00b7 watching Downloads"
-    return "Connected"
+    var parts = ["Connected"]
+    if (s.watcherActive) parts.push("watching Downloads")
+    if (s.pluginScannerActive) parts.push("checking plugins")
+    return parts.join(" \u00b7 ")
   }
 
   function entrySubline(e) {
@@ -145,6 +154,8 @@ Panel {
     else if (state === "present" || state === "valid") items.push("check", "disconnect")
     items.push("watcher")
     if (s.watcherEnabled) items.push("notifyAll")
+    items.push("pluginScan")
+    if (s.pluginScanEnabled) items.push("pluginUpload")
     return items
   }
 
@@ -168,6 +179,12 @@ Panel {
     else if (id === "disconnect") root.askConfirm("disconnect")
     else if (id === "watcher" && s.watcherAvailable && !s.standalone) s.setWatcherEnabled(!s.watcherEnabled)
     else if (id === "notifyAll") s.setNotifyAll(!s.notifyAll)
+    else if (id === "pluginScan" && !s.standalone) s.setPluginScanEnabled(!s.pluginScanEnabled)
+    else if (id === "pluginUpload") {
+      // Turning automatic uploads on needs consent; turning them off does not.
+      if (s.pluginAutoUpload) s.setPluginAutoUpload(false)
+      else root.askConfirm("autoUpload")
+    }
   }
 
   // --- actions ---------------------------------------------------------------
@@ -231,6 +248,8 @@ Panel {
       } else if (purpose === "clear") {
         s.clearHistory()
         root.historyIndex = 0
+      } else if (purpose === "autoUpload") {
+        s.setPluginAutoUpload(true)
       }
     }
     root._confirmSha = ""
@@ -245,11 +264,17 @@ Panel {
         + " is revoked and deleted. Other VirusTotal AI tools that use this file stop working until you connect again."
     }
     if (root.confirmPurpose === "clear") return "Clear the scan history?"
+    if (root.confirmPurpose === "autoUpload") {
+      return "Upload unknown plugin files automatically?\n\n"
+        + "When VirusTotal has never seen a file from an installed plugin, the scanner uploads it (up to 32 MB) "
+        + "as a standard, non-private submission: it is shared with the VirusTotal security community and partners. "
+        + "Don't turn this on if you keep private plugins with credentials or internal code."
+    }
     return ""
   }
 
   function confirmLabel() {
-    if (root.confirmPurpose === "upload") return "Upload"
+    if (root.confirmPurpose === "upload" || root.confirmPurpose === "autoUpload") return "Upload"
     if (root.confirmPurpose === "disconnect") return "Disconnect"
     return "Clear"
   }
@@ -259,6 +284,14 @@ Panel {
     if (root.confirmOpen) dialogKeys.forceActiveFocus()
     else if (root.tab === "scan" && searchField.visible && searchField.enabled) searchField.forceActiveFocus()
     else keyCatcher.forceActiveFocus()
+  }
+
+  function saveApiKeyField() {
+    const key = apiKeyField.text.trim()
+    if (!root.service || root.service.apiKeyBusy || key === "") return
+    root.service.saveApiKey(key)
+    apiKeyField.text = ""
+    root.leaveField()
   }
 
   function leaveField() {
@@ -284,6 +317,8 @@ Panel {
       root.scrollItemIntoView(historyRepeater.itemAt(root.historyIndex))
     } else if (root.tab === "settings" && root.settingsItems.length > 0) {
       root.settingsIndex = Math.max(0, Math.min(root.settingsItems.length - 1, root.settingsIndex + dy))
+    } else if (root.tab === "plugins" && root.pluginRows.length > 0) {
+      root.pluginsIndex = Math.max(0, Math.min(root.pluginRows.length - 1, root.pluginsIndex + dy))
     }
   }
 
@@ -296,11 +331,15 @@ Panel {
     } else if (root.tab === "settings") {
       if (root.cursorActive) root.activateSetting(root.settingsItems[root.settingsIndex])
       else root.cursorActive = true
+    } else if (root.tab === "plugins") {
+      var row = root.pluginRows[root.pluginsIndex]
+      if (root.cursorActive && row) pluginsTab.toggle(row.id)
+      else root.cursorActive = true
     }
   }
 
   function handleTextKey(t) {
-    if (t === "1" || t === "2" || t === "3") {
+    if (t === "1" || t === "2" || t === "3" || t === "4") {
       root.setTab(root.tabs[Number(t) - 1])
     } else if (t === "/") {
       root.setTab("scan")
@@ -372,6 +411,9 @@ Panel {
   onHistoryChanged: {
     if (root.historyIndex >= root.history.length) root.historyIndex = Math.max(0, root.history.length - 1)
   }
+  onPluginRowsChanged: {
+    if (root.pluginsIndex >= root.pluginRows.length) root.pluginsIndex = Math.max(0, root.pluginRows.length - 1)
+  }
   onSettingsItemsChanged: {
     if (root.settingsIndex >= root.settingsItems.length) root.settingsIndex = Math.max(0, root.settingsItems.length - 1)
   }
@@ -404,7 +446,7 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: searchField.activeFocus || root.confirmOpen
+      blocked: root.fieldFocused || root.confirmOpen
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
@@ -482,6 +524,7 @@ Panel {
               options: [
                 { value: "scan", label: "", icon: Model.Glyph.magnify, tooltip: "Scan" },
                 { value: "history", label: "", icon: Model.Glyph.history, tooltip: "History" },
+                { value: "plugins", label: "", icon: Model.Glyph.puzzle, tooltip: "Plugins" },
                 { value: "settings", label: "", icon: Model.Glyph.cog, tooltip: "Settings" }
               ]
               foreground: root.foreground
@@ -1227,7 +1270,8 @@ Panel {
                     Text {
                       id: sourceGlyph
                       textFormat: Text.PlainText
-                      text: historyRow.modelData.source === "watcher" ? Model.Glyph.eye : ""
+                      text: historyRow.modelData.source === "watcher" ? Model.Glyph.eye
+                        : historyRow.modelData.source === "plugins" ? Model.Glyph.puzzle : ""
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.bodySmall
@@ -1248,6 +1292,25 @@ Panel {
                 }
               }
             }
+          }
+
+          // ================================================================
+          // Plugins tab
+          // ================================================================
+          PluginsTab {
+            id: pluginsTab
+            visible: root.tab === "plugins" && root.ready
+            width: parent.width
+            panel: root
+            service: root.service
+            now: root.now
+            cursorActive: root.cursorActive && root.tab === "plugins"
+            cursorIndex: root.pluginsIndex
+            onCursorRequested: index => {
+              root.cursorActive = true
+              root.pluginsIndex = index
+            }
+            onOpenSettings: root.setTab("settings")
           }
 
           // ================================================================
@@ -1404,6 +1467,193 @@ Panel {
             }
 
             PanelSectionHeader {
+              text: "PLUGINS"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Check installed plugins"
+              description: "Hashes every file of new and updated plugins in "
+                + (root.service ? Model.displayPath(root.service.pluginsDir, root.service.homeDir) : "~/.config/omarchy/plugins")
+                + " and looks each SHA-256 up with VirusTotal."
+              checked: !!root.service && root.service.pluginScanEnabled
+              hasCursor: root.settingHasCursor("pluginScan")
+              enabled: !!root.service && !root.service.standalone
+              opacity: enabled ? 1 : 0.55
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onHovered: function(h) { if (h) root.hoverSetting("pluginScan") }
+              onClicked: root.activateSetting("pluginScan")
+            }
+
+            Column {
+              visible: !!root.service && root.service.pluginScanEnabled
+              width: parent.width
+              spacing: Style.space(10)
+
+              Toggle {
+                width: parent.width
+                label: "Upload unknown plugin files automatically"
+                description: "Files VirusTotal has never seen are uploaded as standard (public) submissions. Off: they are only reported as unknown."
+                checked: !!root.service && root.service.pluginAutoUpload
+                hasCursor: root.settingHasCursor("pluginUpload")
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onHovered: function(h) { if (h) root.hoverSetting("pluginUpload") }
+                onClicked: root.activateSetting("pluginUpload")
+              }
+
+              Dropdown {
+                width: parent.width
+                label: "Engine"
+                value: root.service ? root.service.pluginBackend : "vtai"
+                options: [
+                  { value: "vtai", label: "VirusTotal AI (connected account)" },
+                  { value: "classic", label: "VirusTotal API key" }
+                ]
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onChanged: function(value) { if (root.service) root.service.setPluginBackend(value) }
+              }
+
+              Column {
+                visible: !!root.service && root.service.pluginBackend === "classic"
+                width: parent.width
+                spacing: Style.space(8)
+
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: !root.service ? ""
+                    : root.service.apiKeyState === "present" ? "API key saved in " + root.service.apiKeyDisplay + "."
+                    : root.service.apiKeyState === "invalid" ? "VirusTotal rejected the key in " + root.service.apiKeyDisplay + "."
+                    : "No API key saved. Paste yours from virustotal.com (profile \u2192 API key)."
+                  color: root.service && root.service.apiKeyState === "invalid" ? root.urgent : root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  wrapMode: Text.Wrap
+                }
+
+                Item {
+                  width: parent.width
+                  implicitHeight: Math.max(apiKeyField.implicitHeight, apiKeyButtons.implicitHeight)
+
+                  TextField {
+                    id: apiKeyField
+                    anchors.left: parent.left
+                    anchors.right: apiKeyButtons.left
+                    anchors.rightMargin: Style.space(6)
+                    anchors.verticalCenter: parent.verticalCenter
+                    password: true
+                    placeholderText: root.service && root.service.apiKeyState !== "missing" ? "Replace the API key" : "VirusTotal API key"
+                    foreground: root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    selectByMouse: true
+                    onAccepted: root.saveApiKeyField()
+                    Keys.onEscapePressed: root.leaveField()
+                  }
+
+                  Row {
+                    id: apiKeyButtons
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(4)
+
+                    Button {
+                      id: saveKeyButton
+                      text: "Save"
+                      iconText: Model.Glyph.key
+                      bordered: true
+                      enabled: !!root.service && !root.service.apiKeyBusy && apiKeyField.text.trim() !== ""
+                      opacity: enabled ? 1 : 0.55
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.saveApiKeyField()
+                    }
+
+                    Button {
+                      visible: !!root.service && root.service.apiKeyState !== "missing"
+                      iconText: Model.Glyph.trash
+                      tooltipText: "Delete the saved API key"
+                      bordered: true
+                      enabled: !!root.service && !root.service.apiKeyBusy
+                      opacity: enabled ? 1 : 0.55
+                      foreground: root.foreground
+                      fontFamily: root.fontFamily
+                      onClicked: root.service.removeApiKey()
+                    }
+                  }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  visible: text !== ""
+                  width: parent.width
+                  text: root.service ? root.service.apiKeyMessage : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+
+                NumberField {
+                  id: perMinField
+                  width: parent.width
+                  label: "Requests per minute"
+                  from: 1
+                  to: 10000
+                  value: root.service ? root.service.classicPerMin : 4
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onModified: function(v) { if (root.service) root.service.setClassicLimits(v, root.service.classicPerDay) }
+                }
+
+                NumberField {
+                  id: perDayField
+                  width: parent.width
+                  label: "Requests per day"
+                  from: 1
+                  to: 1000000
+                  stepSize: 100
+                  value: root.service ? root.service.classicPerDay : 500
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  onModified: function(v) { if (root.service) root.service.setClassicLimits(root.service.classicPerMin, v) }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: "A public API key allows 4 requests per minute and 500 per day, counting lookups, uploads and analysis checks. Raise the limits for a premium key."
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.Wrap
+                }
+              }
+
+              NumberField {
+                id: parallelField
+                width: parent.width
+                label: "Parallel requests"
+                from: 1
+                to: 8
+                value: root.service ? root.service.maxParallel : 4
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onModified: function(v) { if (root.service) root.service.setMaxParallel(v) }
+              }
+            }
+
+            PanelSeparator {
+              width: parent.width
+              foreground: root.foreground
+            }
+
+            PanelSectionHeader {
               text: "ABOUT"
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -1413,7 +1663,7 @@ Panel {
               textFormat: Text.PlainText
               width: parent.width
               text: "Version " + (root.service ? root.service.pluginVersion : Model.DEFAULT_VERSION)
-                + ". Community plugin using the VirusTotal AI API (ai.virustotal.com). "
+                + ". Community plugin using the VirusTotal AI API (ai.virustotal.com); the plugin scanner can use a VirusTotal API key (www.virustotal.com) instead."
               color: root.dim
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
