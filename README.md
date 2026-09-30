@@ -1,6 +1,6 @@
 # VirusTotal for Omarchy
 
-A community plugin for the [Omarchy](https://omarchy.org) shell (Quattro) that checks URLs, domains, IP addresses, file hashes and local files against VirusTotal from the bar. It can also watch your Downloads folder and your installed Omarchy plugins, and alert you when VirusTotal flags a new file.
+A community plugin for the [Omarchy](https://omarchy.org) shell (Quattro) that checks URLs, domains, IP addresses, file hashes and local files against VirusTotal from the bar. It can also watch your Downloads folder **and your installed Omarchy plugins**, and alert you when VirusTotal flags a new file.
 
 It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) with `curl`. There is nothing to build and no binary to install.
 
