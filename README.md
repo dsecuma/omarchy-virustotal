@@ -1,6 +1,6 @@
 # VirusTotal for Omarchy
 
-A community plugin for the [Omarchy](https://omarchy.org) shell (Quattro) that checks URLs, domains, IP addresses, file hashes and local files against VirusTotal from the bar. It can also watch your Downloads folder and alert you when a new file is flagged.
+A community plugin for the [Omarchy](https://omarchy.org) shell (Quattro) that checks URLs, domains, IP addresses, file hashes and local files against VirusTotal from the bar. It can also watch your Downloads folder and your installed Omarchy plugins, and alert you when VirusTotal flags a new file.
 
 It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) with `curl`. There is nothing to build and no binary to install.
 
@@ -17,7 +17,8 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 - **History tab**: the last 50 checks, kept across restarts.
 - The plugin never issues its own verdict: headlines are the raw counts (e.g. `2/91 flagged`) and AI insights are shown as returned.
 - **Downloads watcher** (off by default): looks up each new download and notifies you when VirusTotal engines or AI insights flag it. It never uploads anything by itself.
-- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>3</kbd> switch tabs.
+- **Plugin scanner** (off by default): notices when an Omarchy plugin is installed or updated and looks up every file of it on VirusTotal, several requests at a time within the API quota. Unknown files are uploaded only if you turned that on.
+- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>4</kbd> switch tabs.
 - Follows your Omarchy theme; no hard-coded colours.
 
 ## Requirements
@@ -70,13 +71,38 @@ Enable it in **Settings → Check new downloads**. It watches the folder from `X
 - Only flagged files notify, unless you enable **Notify for every checked file**. Clicking a notification opens the panel.
 - The watcher runs once per session, whatever the number of monitors. On a replacement bar that doesn't run plugin services, the panel still works but the watcher and notifications are off.
 
+## Plugin scanner
+
+Enable it in **Settings → Plugins → Check installed plugins**. It watches `~/.config/omarchy/plugins` (the folder `omarchy plugin add` installs into), and also checks it every 10 minutes and whenever you open the panel.
+
+- **What counts as a change**: a new plugin folder, or a different git commit, version or file list in an existing one. Clicking **Rescan** on a plugin, or **Rescan all**, checks it again.
+- **The first run** takes a baseline: every installed plugin is scanned, without "new plugin" notifications.
+- **What is sent**: each file is hashed locally and only its SHA-256 is looked up. `.git/`, symlinks and empty files are skipped. Files shared by several plugins are looked up once. A file with a report is looked up again after 7 days; an unknown file after 1 hour.
+- **Uploads** happen only when **Upload unknown plugin files automatically** is on. Turning it on asks for your consent once, in a dialog. Uploads are standard, non-private submissions (see [Privacy and uploads](#privacy-and-uploads)). Files above 32 MB are never uploaded, and each file is hashed again right before sending. After an upload the scanner follows the analysis and looks the file up again a little later to collect AI insights.
+- **What counts as flagged**: only VirusTotal's own results. Engines flagged the file as malicious or suspicious, or a Code Insight / AI insight returned a malicious or suspicious verdict. The plugin makes no judgement of its own.
+- **Alerts**: a notification when a plugin is added or updated, and one when its scan finds flagged files (for example `VirusTotal flagged 2 files in <plugin>`; with **Notify for every checked file** also clean results). Flagged files also go into the history and turn the bar dot red.
+- **Plugins tab**: every installed plugin with its status, flagged/total counts and the remaining quota. Click a plugin to list its files; click a file to open its VirusTotal report.
+
+### Engine and quota
+
+| Engine | Credential | Default rate the scanner uses |
+|---|---|---|
+| VirusTotal AI (default) | The VTAI agent token from **Connect** | 48 lookups/min and 900/day; 16 uploads/min and 450/day |
+| Classic API v3 | Your VirusTotal API key | 4 requests/min and 500/day (public key limits; adjustable for premium keys) |
+
+- Up to 4 requests run in parallel (**Parallel requests**, 1–8). A shared token bucket keeps them within the per-minute and per-day limits. When the daily quota runs out, the scan waits until 00:00 UTC.
+- If VirusTotal answers with a rate limit error, the scanner pauses and retries. A rejected key or token stops the scan until you fix it.
+- **The API key** is only used by the plugin scanner; the Scan tab and the Downloads watcher always use VTAI. It is saved to `~/.config/omarchy-virustotal/vt-apikey.header` with mode 600. The key reaches the shell through stdin and `curl` reads it with `-H @file`, so it never appears on a command line. **Delete** removes the file.
+
 ## Files
 
 | Path | Contents |
 |---|---|
 | `~/.config/vtai/auth.header` | VTAI agent token (shared with other VTAI tools) |
-| `~/.config/omarchy-virustotal/config.json` | Watcher settings |
+| `~/.config/omarchy-virustotal/config.json` | Watcher and plugin scanner settings |
+| `~/.config/omarchy-virustotal/vt-apikey.header` | Optional classic VirusTotal API key (mode 600) |
 | `~/.local/state/omarchy-virustotal/history.json` | Check history and the last watcher alert |
+| `~/.local/state/omarchy-virustotal/plugins.json` | Plugin scanner state: known plugins, per-file results and quota counters |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured.
 
@@ -102,6 +128,7 @@ Enable it in **Settings → Check new downloads**. It watches the folder from `X
 - **"Required tools not found"**: install the listed commands and reopen the panel.
 - **"Token rejected"**: the token was revoked or expired. Use **Reconnect** in the panel.
 - **The watcher option is disabled**: the `Qt.labs.folderlistmodel` module is missing (install `qt6-declarative`), or the bar doesn't run plugin services.
+- **The plugin scanner is paused**: open the Plugins tab to see why (not connected, key missing or rejected, quota used up until 00:00 UTC).
 - **Logs**: warnings are printed with a `[virustotal]` prefix in the Omarchy shell log.
 
 ## Development
@@ -109,6 +136,7 @@ Enable it in **Settings → Check new downloads**. It watches the folder from `X
 ```bash
 node tests/model.test.js     # pure logic in Model.js
 node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with a fake curl)
+node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
 qmllint -I "$OMARCHY_PATH/shell" *.qml
 "$OMARCHY_PATH/bin/omarchy-plugin-validate" .
 ```
@@ -117,11 +145,15 @@ qmllint -I "$OMARCHY_PATH/shell" *.qml
 |---|---|
 | `manifest.json` | Plugin manifest (`bar-widget` + `service`) |
 | `BarWidget.qml` | Bar icon; loads the panel and finds the shared service |
-| `Panel.qml` | Scan, History and Settings UI |
+| `Panel.qml` | Scan, History, Plugins and Settings UI |
+| `PluginsTab.qml` | Plugins tab: installed plugins and their files |
 | `Service.qml` | Credential, API calls, uploads, polling, history, watcher |
+| `PluginScanner.qml` | Plugin scanner: change detection, parallel lookups/uploads, state |
 | `DownloadsFolder.qml` | Downloads listing (loaded on demand) |
+| `PluginsFolder.qml` | Watches the plugins folder (loaded on demand) |
 | `VirusTotalIcon.qml` | The VirusTotal mark drawn with theme colours |
 | `Model.js` | Pure helpers (input detection, result mapping, history) |
+| `Scanner.js` | Pure plugin scanner logic (rate limiter, scheduler, diffing, summaries) |
 | `Scripts.js` | POSIX `sh` snippets; untrusted values only travel as arguments |
 
 CI (`.github/workflows/ci.yml`) runs the tests, checks the manifest, rejects hex colours, symlinks and executable files, and runs Omarchy's plugin validator.

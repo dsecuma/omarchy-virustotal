@@ -9,7 +9,8 @@
 //
 // tests/scripts.test.js runs every snippet against a fake curl.
 
-// $1 config dir, $2 state dir, $3 credential file, $4 user-dirs.dirs
+// $1 config dir, $2 state dir, $3 credential file, $4 user-dirs.dirs,
+// $5 VirusTotal API key header file (optional)
 var startup = [
   "umask 077",
   "mkdir -p \"$1\" \"$2\" 2>/dev/null",
@@ -18,7 +19,13 @@ var startup = [
   "  command -v \"$tool\" >/dev/null 2>&1 || missing=\"$missing $tool\"",
   "done",
   "printf 'missing=%s\\n' \"${missing# }\"",
+  "scanmissing=",
+  "for tool in find awk head; do",
+  "  command -v \"$tool\" >/dev/null 2>&1 || scanmissing=\"$scanmissing $tool\"",
+  "done",
+  "printf 'scanmissing=%s\\n' \"${scanmissing# }\"",
   "if [ -s \"$3\" ]; then echo auth=present; else echo auth=missing; fi",
+  "if [ -n \"$5\" ] && [ -s \"$5\" ]; then echo apikey=present; else echo apikey=missing; fi",
   "dl=",
   "if [ -r \"$4\" ]; then",
   "  dl=$(sed -n 's/^[[:space:]]*XDG_DOWNLOAD_DIR[[:space:]]*=[[:space:]]*\"\\(.*\\)\"[[:space:]]*$/\\1/p' \"$4\" | tail -n 1)",
@@ -105,4 +112,79 @@ var notify = [
   "  exec notify-send -a VirusTotal -u \"$1\" -- \"$3\" \"$4\"",
   "fi",
   "exit 0"
+].join("\n")
+
+// --- installed-plugin scanner ------------------------------------------------
+
+// One line per plugin folder in $1 (normally ~/.config/omarchy/plugins):
+// "dir\thead\tcount size mtime\tversion\tname\tlink|dir". head is the git
+// commit or "-". The count/size/mtime stamp changes whenever any file is
+// added, removed or rewritten, so the scanner only rehashes changed plugins.
+// Folders whose names contain tabs or newlines are skipped.
+var probePlugins = [
+  "cd \"$1\" 2>/dev/null || exit 3",
+  "tab=$(printf '\\t')",
+  "nl='",
+  "'",
+  "for d in *; do",
+  "  [ -d \"$d\" ] || continue",
+  "  case $d in *\"$tab\"*|*\"$nl\"*) continue ;; esac",
+  "  kind=dir",
+  "  [ -L \"$d\" ] && kind=link",
+  "  head=-",
+  "  if [ -e \"$d/.git\" ] && command -v git >/dev/null 2>&1; then",
+  "    head=$(git -C \"$d\" rev-parse HEAD 2>/dev/null) || head=-",
+  "  fi",
+  "  stamp=$(find \"$d/\" -name .git -prune -o -type f -printf '%T@ %s\\n' 2>/dev/null | awk '{ n++; s += $2; if ($1 > m) m = $1 } END { printf \"%d %d %d\", n, s, m }')",
+  "  ver= name=",
+  "  if [ -f \"$d/manifest.json\" ]; then",
+  "    ver=$(sed -n 's/^[[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"$d/manifest.json\" | head -n 1)",
+  "    name=$(sed -n 's/^[[:space:]]*\"name\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"$d/manifest.json\" | head -n 1)",
+  "  fi",
+  "  printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"$d\" \"$head\" \"$stamp\" \"$ver\" \"$name\" \"$kind\"",
+  "done"
+].join("\n")
+
+// SHA-256 of every regular, non-empty file in plugin folder $1, skipping
+// .git/, symlinks, files over 1 GB and paths containing a newline.
+// $2 max files. stdout: "#\t<total>\t<skipped>" then "sha256\tsize\trelpath".
+var hashPlugin = [
+  "cd \"$1/\" 2>/dev/null || exit 3",
+  "max=${2:-2000}",
+  "nl='",
+  "'",
+  "total=$(find . -name .git -prune -o -type f -size +0 ! -path \"*$nl*\" -print 2>/dev/null | wc -l)",
+  "skipped=$(find . -name .git -prune -o -type f -path \"*$nl*\" -printf x 2>/dev/null | wc -c)",
+  "printf '#\\t%s\\t%s\\n' \"$((total))\" \"$((skipped))\"",
+  "find . -name .git -prune -o -type f -size +0 -size -1000M ! -path \"*$nl*\" -print 2>/dev/null | head -n \"$max\" |",
+  "while IFS= read -r f; do",
+  "  size=$(stat -c %s -- \"$f\" 2>/dev/null) || continue",
+  "  sum=$(sha256sum < \"$f\" 2>/dev/null) || continue",
+  "  printf '%s\\t%s\\t%s\\n' \"${sum%% *}\" \"$size\" \"${f#./}\"",
+  "done"
+].join("\n")
+
+// Save a VirusTotal API key read from STDIN (never argv) as a curl header
+// file with mode 600. $1 config dir, $2 key file.
+// Exit: 2 invalid key, 10 mkdir failed, 14 write failed.
+var saveApiKey = [
+  "umask 077",
+  "key=",
+  "IFS= read -r key || [ -n \"$key\" ] || exit 2",
+  "key=$(printf '%s' \"$key\" | tr -d ' \\t\\r')",
+  "case $key in ''|*[!A-Za-z0-9]*) exit 2 ;; esac",
+  "[ ${#key} -eq 64 ] || exit 2",
+  "[ -d \"$1\" ] || mkdir -p \"$1\" || exit 10",
+  "tmp=\"$2.tmp.$$\"",
+  "rm -f \"$tmp\"",
+  "(set -C; printf 'x-apikey: %s\\n' \"$key\" > \"$tmp\") 2>/dev/null || exit 14",
+  "mv -f \"$tmp\" \"$2\" || { rm -f \"$tmp\"; exit 14; }"
+].join("\n")
+
+// Standard (public) upload to the classic VirusTotal API: POST /files.
+// $1 file, $2 API key header file, $3 URL, $4 user agent, $5 max seconds.
+// The file travels on stdin so curl -F never parses the local path (';' ',').
+var classicUpload = [
+  "[ -f \"$1\" ] && [ -r \"$1\" ] || exit 3",
+  "exec curl -sS --proto =https --connect-timeout 10 --max-time \"${5:-130}\" -A \"$4\" -H \"@$2\" -H 'Accept: application/json' -w '\\n%{http_code}' -F 'file=@-;filename=sample' \"$3\" < \"$1\""
 ].join("\n")

@@ -380,9 +380,16 @@ test("state and config round-trip", () => {
   assert.strictEqual(s.alertAcknowledged, false)
   same(JSON.parse(JSON.stringify(M.parseState("garbage"))), { entries: [], alert: null, alertAcknowledged: true })
   assert.strictEqual(M.parseState("[{\"kind\":\"url\",\"target\":\"x\"}, 5]").entries.length, 1)
-  same(M.parseConfig(M.serializeConfig({ watcherEnabled: true })), { watcherEnabled: true, notifyAll: false })
-  same(M.parseConfig("[]"), { watcherEnabled: false, notifyAll: false })
-  same(M.parseConfig(""), { watcherEnabled: false, notifyAll: false })
+  const defaults = { watcherEnabled: false, notifyAll: false, pluginScanEnabled: false, pluginAutoUpload: false,
+                     pluginBackend: "vtai", maxParallel: 4, classicPerMin: 4, classicPerDay: 500 }
+  same(M.parseConfig(M.serializeConfig({ watcherEnabled: true })), Object.assign({}, defaults, { watcherEnabled: true }))
+  same(M.parseConfig("[]"), defaults)
+  same(M.parseConfig(""), defaults)
+  same(M.parseConfig(M.serializeConfig({ pluginScanEnabled: true, pluginAutoUpload: true, pluginBackend: "classic",
+                                         maxParallel: 99, classicPerMin: 0, classicPerDay: "1000" })),
+       Object.assign({}, defaults, { pluginScanEnabled: true, pluginAutoUpload: true, pluginBackend: "classic",
+                                     maxParallel: 8, classicPerMin: 1, classicPerDay: 1000 }))
+  assert.strictEqual(M.parseConfig("{\"pluginBackend\":\"evil\"}").pluginBackend, "vtai")
 })
 
 test("ignores temporary download files", () => {

@@ -5,8 +5,9 @@ import "Model.js" as Model
 import "Scripts.js" as Scripts
 
 // Background service for the VirusTotal plugin: the VirusTotal AI (VTAI)
-// credential, lookups, consented uploads, analysis polling, history and the
-// optional Downloads watcher.
+// credential, lookups, consented uploads, analysis polling, history, the
+// optional Downloads watcher and the optional installed-plugin scanner
+// (PluginScanner.qml).
 //
 // The shell mounts one instance per session (manifest kind "service"), so the
 // bars on every monitor share this state and the watcher runs once.
@@ -42,6 +43,13 @@ Item {
   readonly property string authHeaderDisplay: Model.displayPath(authHeaderPath, homeDir)
   readonly property string configDir: configHome + "/omarchy-virustotal"
   readonly property string stateDir: stateHome + "/omarchy-virustotal"
+  // Optional classic VirusTotal API key for the plugin scanner, stored as a
+  // curl header file (mode 600) so the key never enters argv or QML state.
+  readonly property string apiKeyPath: configDir + "/vt-apikey.header"
+  readonly property string apiKeyDisplay: Model.displayPath(apiKeyPath, homeDir)
+  readonly property string classicApiBase: "https://www.virustotal.com/api/v3"
+  // Same location omarchy-plugin-add installs to.
+  readonly property string pluginsDir: homeDir + "/.config/omarchy/plugins"
 
   // --- startup ---------------------------------------------------------------
   property bool ready: false
@@ -97,6 +105,23 @@ Item {
   property bool watchBusy: false
   property int watchQueueLength: 0
 
+  // --- installed-plugin scanner (persisted settings) -------------------------
+  property bool pluginScanEnabled: false
+  property bool pluginAutoUpload: false
+  property string pluginBackend: "vtai"
+  property int maxParallel: 4
+  property int classicPerMin: 4
+  property int classicPerDay: 500
+  property string scanMissingTools: ""
+  // missing | present | invalid
+  property string apiKeyState: "missing"
+  property bool apiKeyBusy: false
+  property string apiKeyMessage: ""
+  readonly property bool pluginBackendReady: pluginBackend === "classic" ? apiKeyState === "present" : connected
+  readonly property bool pluginScannerActive: pluginScanEnabled && !standalone && ready && missingTools === ""
+    && scanMissingTools === "" && pluginBackendReady
+  property alias scanner: pluginScanner
+
   readonly property string barStatus: {
     if (lastAlert && !alertAcknowledged) return lastAlert.stats && lastAlert.stats.malicious > 0 ? "malicious" : "suspicious"
     if (busy || connecting || (analysisActive && !analysisStalled)) return "busy"
@@ -133,8 +158,11 @@ Item {
   }
 
   // Run argv once; callback(exitCode, stdout, stderr). Exit 124 = watchdog.
-  function runJob(argv, timeoutMs, callback) {
-    var job = jobComponent.createObject(root, { argv: argv, timeoutMs: timeoutMs || 60000, callback: callback })
+  // `stdinText` (optional) is written to the process and stdin is closed;
+  // secrets travel this way instead of argv.
+  function runJob(argv, timeoutMs, callback, stdinText) {
+    var job = jobComponent.createObject(root, { argv: argv, timeoutMs: timeoutMs || 60000, callback: callback,
+                                                stdinText: stdinText === undefined || stdinText === null ? "" : String(stdinText) })
     if (!job) Qt.callLater(function() { callback(125, "", "") })
   }
 
@@ -143,16 +171,19 @@ Item {
     root.runJob(["sh", "-c", script, "sh"].concat(args || []), timeoutMs, callback)
   }
 
-  // One HTTPS request to VTAI; callback({ exitCode, http, body, json }).
+  // One HTTPS request to VTAI (or, with opts.backend === "classic", to the
+  // classic VirusTotal API with the saved API key); callback({ exitCode,
+  // http, body, json }).
   function api(method, path, opts, callback) {
     var o = opts || {}
+    var classic = o.backend === "classic"
     if (root.missingTools.split(" ").indexOf("curl") >= 0) {
       Qt.callLater(function() { callback({ exitCode: 127, http: 0, body: "", json: null }) })
       return
     }
     var maxTime = o.maxTime || 40
     var argv = ["curl", "-sS", "--proto", "=https", "--connect-timeout", "10", "--max-time", String(maxTime),
-                "-A", root.userAgent, "-H", "@" + root.authHeaderPath, "-H", "Accept: application/json",
+                "-A", root.userAgent, "-H", "@" + (classic ? root.apiKeyPath : root.authHeaderPath), "-H", "Accept: application/json",
                 "-w", "\n%{http_code}"]
     if (method === "DELETE") argv.push("-X", "DELETE")
     if (o.json !== undefined) {
@@ -162,12 +193,12 @@ Item {
       argv.push("-H", "Content-Type: application/octet-stream", "-H", "X-VTAI-Consent: standard-v1",
                 "--data-binary", "@" + o.file)
     }
-    argv.push(root.apiBase + path)
+    argv.push((classic ? root.classicApiBase : root.apiBase) + path)
     root.runJob(argv, (maxTime + 20) * 1000, function(code, out) {
       var parsed = Model.parseCurlOutput(out)
       var res = { exitCode: code, http: parsed.http, body: parsed.body, json: Model.parseJson(parsed.body) }
       // curl cannot read a deleted credential file either; resync the state.
-      if (!res.http) root.refreshCredentialPresence()
+      if (!res.http && !classic) root.refreshCredentialPresence()
       callback(res)
     })
   }
@@ -190,6 +221,7 @@ Item {
       property var argv: []
       property int timeoutMs: 60000
       property var callback: null
+      property string stdinText: ""
       property bool finished: false
       property string savedOut: ""
       property string savedErr: ""
@@ -214,6 +246,13 @@ Item {
       Process {
         id: proc
         command: job.argv
+        stdinEnabled: job.stdinText !== ""
+        onStarted: {
+          if (job.stdinText === "") return
+          write(job.stdinText)
+          job.stdinText = ""
+          stdinEnabled = false
+        }
         stdout: StdioCollector { id: outCollector; waitForEnd: true; onStreamFinished: job.savedOut = text }
         stderr: StdioCollector { id: errCollector; waitForEnd: true; onStreamFinished: job.savedErr = text }
         // Deferred so the collectors can deliver their final text first.
@@ -252,10 +291,12 @@ Item {
   // ===========================================================================
 
   function startup() {
-    root.sh(Scripts.startup, [root.configDir, root.stateDir, root.authHeaderPath, root.configHome + "/user-dirs.dirs"], 15000,
+    root.sh(Scripts.startup, [root.configDir, root.stateDir, root.authHeaderPath, root.configHome + "/user-dirs.dirs", root.apiKeyPath], 15000,
       function(code, out) {
         var info = Model.parseKeyValues(out)
         root.missingTools = info.missing || ""
+        root.scanMissingTools = info.scanmissing || ""
+        if (root.apiKeyState !== "invalid" || info.apikey !== "present") root.apiKeyState = info.apikey === "present" ? "present" : "missing"
         if (root.credentialState === "checking")
           root.credentialState = info.auth === "present" ? "present" : "missing"
         root.downloadsDir = Model.resolveDownloadsDir(info.downloads, root.homeDir, Quickshell.env("XDG_DOWNLOAD_DIR"))
@@ -298,10 +339,19 @@ Item {
     var c = Model.parseConfig(t)
     root.watcherEnabled = c.watcherEnabled
     root.notifyAll = c.notifyAll
+    root.pluginScanEnabled = c.pluginScanEnabled
+    root.pluginAutoUpload = c.pluginAutoUpload
+    root.pluginBackend = c.pluginBackend
+    root.maxParallel = c.maxParallel
+    root.classicPerMin = c.classicPerMin
+    root.classicPerDay = c.classicPerDay
   }
 
   function saveConfig() {
-    var t = Model.serializeConfig({ watcherEnabled: root.watcherEnabled, notifyAll: root.notifyAll })
+    var t = Model.serializeConfig({ watcherEnabled: root.watcherEnabled, notifyAll: root.notifyAll,
+                                    pluginScanEnabled: root.pluginScanEnabled, pluginAutoUpload: root.pluginAutoUpload,
+                                    pluginBackend: root.pluginBackend, maxParallel: root.maxParallel,
+                                    classicPerMin: root.classicPerMin, classicPerDay: root.classicPerDay })
     root._lastConfigText = t
     if (!root.dirsReady) {
       root._configDirty = true
@@ -832,6 +882,100 @@ Item {
     root.saveConfig()
   }
 
+  // --- installed-plugin scanner settings -------------------------------------
+
+  function setPluginScanEnabled(value) {
+    var v = value === true
+    if (root.pluginScanEnabled === v) return
+    root.pluginScanEnabled = v
+    root.saveConfig()
+  }
+
+  // Only the panel calls this with true, after the standard-submission
+  // consent dialog.
+  function setPluginAutoUpload(value) {
+    var v = value === true
+    if (root.pluginAutoUpload === v) return
+    root.pluginAutoUpload = v
+    root.saveConfig()
+  }
+
+  function setPluginBackend(value) {
+    var v = Model.PLUGIN_BACKENDS.indexOf(value) >= 0 ? value : "vtai"
+    if (root.pluginBackend === v) return
+    root.pluginBackend = v
+    root.saveConfig()
+  }
+
+  function setMaxParallel(value) {
+    var c = Model.normalizeConfig({ maxParallel: value })
+    if (root.maxParallel === c.maxParallel) return
+    root.maxParallel = c.maxParallel
+    root.saveConfig()
+  }
+
+  function setClassicLimits(perMin, perDay) {
+    var c = Model.normalizeConfig({ classicPerMin: perMin, classicPerDay: perDay })
+    if (root.classicPerMin === c.classicPerMin && root.classicPerDay === c.classicPerDay) return
+    root.classicPerMin = c.classicPerMin
+    root.classicPerDay = c.classicPerDay
+    root.saveConfig()
+  }
+
+  // The key reaches the shell on stdin only (Scripts.saveApiKey).
+  function saveApiKey(key) {
+    if (root.apiKeyBusy || !root.dirsReady) return
+    var k = String(key || "").replace(/\s+/g, "")
+    if (!/^[A-Za-z0-9]{64}$/.test(k)) {
+      root.apiKeyMessage = "A VirusTotal API key is 64 letters and digits."
+      return
+    }
+    root.apiKeyBusy = true
+    root.apiKeyMessage = ""
+    root.runJob(["sh", "-c", Scripts.saveApiKey, "sh", root.configDir, root.apiKeyPath], 10000, function(code) {
+      root.apiKeyBusy = false
+      if (code === 0) {
+        root.apiKeyState = "present"
+        root.apiKeyMessage = "API key saved in " + root.apiKeyDisplay + "."
+      } else {
+        root.apiKeyMessage = code === 2 ? "A VirusTotal API key is 64 letters and digits." : "Could not save the API key."
+      }
+    }, k + "\n")
+  }
+
+  function removeApiKey() {
+    if (root.apiKeyBusy) return
+    root.apiKeyBusy = true
+    root.sh(Scripts.removeFile, [root.apiKeyPath], 10000, function(code) {
+      root.apiKeyBusy = false
+      if (code !== 0) {
+        root.apiKeyMessage = "Could not delete " + root.apiKeyDisplay + "."
+        return
+      }
+      root.apiKeyState = "missing"
+      root.apiKeyMessage = "API key removed."
+    })
+  }
+
+  function markApiKeyInvalid() {
+    if (root.apiKeyState === "present") root.apiKeyState = "invalid"
+    root.apiKeyMessage = "VirusTotal rejected the API key. Save a valid one to resume the plugin scanner."
+  }
+
+  PluginScanner {
+    id: pluginScanner
+    service: root
+    active: root.pluginScannerActive
+    backend: root.pluginBackend
+    autoUpload: root.pluginAutoUpload
+    maxParallel: root.maxParallel
+    classicPerMin: root.classicPerMin
+    classicPerDay: root.classicPerDay
+    notifyAll: root.notifyAll
+    pluginsDir: root.pluginsDir
+    statePath: root.dirsReady ? root.stateDir + "/plugins.json" : ""
+  }
+
   // Each open panel (one per monitor at most) calls panelOpened() once and
   // panelClosed() once.
   function panelOpened() {
@@ -844,6 +988,7 @@ Item {
     if (root.credentialState === "invalid" || (root.connected && !root.accessChecked)) root.checkAccess(false)
     if (root.downloadsDirExists) root.refreshRecentDownloads()
     else root.checkDownloadsDir()
+    if (pluginScanner.active) pluginScanner.probe()
   }
 
   function panelClosed() {
@@ -860,7 +1005,12 @@ Item {
 
   function notifyResult(r) {
     if (root.standalone || !r) return
-    var n = Model.notificationFor(r)
+    root.notifyMessage(Model.notificationFor(r))
+  }
+
+  // n: { urgency, glyph, title, body }
+  function notifyMessage(n) {
+    if (root.standalone || !n) return
     Quickshell.execDetached(["sh", "-c", Scripts.notify, "sh", n.urgency, n.glyph, n.title, n.body, root.pluginId, root.omarchyPath])
   }
 

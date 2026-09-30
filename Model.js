@@ -57,7 +57,8 @@ var Glyph = {
   progressClock: cp(0xF0996),
   eye: cp(0xF0208),
   earth: cp(0xF01E7),
-  copy: cp(0xF018F)
+  copy: cp(0xF018F),
+  puzzle: cp(0xF0431)
 }
 
 // --- small utilities ---------------------------------------------------------
@@ -682,7 +683,7 @@ function notificationFor(r) {
   var name = displayTarget(r)
   var denom = ratedCount(r)
   var flagged = flaggedCount(r)
-  var noun = r && r.source === "watcher" ? "download" : "file"
+  var noun = r && r.source === "watcher" ? "download" : (r && r.source === "plugins" ? "plugin file" : "file")
   if (hasFlags(r)) {
     var parts = []
     if (flagged > 0) {
@@ -868,15 +869,41 @@ function serializeState(entries, alert, alertAcknowledged) {
   }, null, 2) + "\n"
 }
 
+// Scanner engines: "vtai" (the agent token) or "classic" (a VirusTotal API key).
+var PLUGIN_BACKENDS = ["vtai", "classic"]
+
+function intSetting(value, lo, hi, fallback) {
+  var n = Number(value)
+  if (!isFinite(n)) return fallback
+  n = Math.floor(n)
+  return n < lo ? lo : (n > hi ? hi : n)
+}
+
+function normalizeConfig(j) {
+  var c = j && typeof j === "object" && !Array.isArray(j) ? j : {}
+  return {
+    watcherEnabled: c.watcherEnabled === true,
+    notifyAll: c.notifyAll === true,
+    pluginScanEnabled: c.pluginScanEnabled === true,
+    pluginAutoUpload: c.pluginAutoUpload === true,
+    pluginBackend: PLUGIN_BACKENDS.indexOf(c.pluginBackend) >= 0 ? c.pluginBackend : "vtai",
+    maxParallel: intSetting(c.maxParallel, 1, 8, 4),
+    classicPerMin: intSetting(c.classicPerMin, 1, 100000, 4),
+    classicPerDay: intSetting(c.classicPerDay, 1, 10000000, 500)
+  }
+}
+
 function parseConfig(text) {
-  var j = parseJson(text)
-  if (!j || typeof j !== "object" || Array.isArray(j)) j = {}
-  return { watcherEnabled: j.watcherEnabled === true, notifyAll: j.notifyAll === true }
+  return normalizeConfig(parseJson(text))
 }
 
 function serializeConfig(config) {
-  var c = config || {}
-  return JSON.stringify({ version: 1, watcherEnabled: c.watcherEnabled === true, notifyAll: c.notifyAll === true }, null, 2) + "\n"
+  var c = normalizeConfig(config)
+  var out = { version: 1 }
+  for (var k in c) {
+    if (Object.prototype.hasOwnProperty.call(c, k)) out[k] = c[k]
+  }
+  return JSON.stringify(out, null, 2) + "\n"
 }
 
 // --- downloads ---------------------------------------------------------------
