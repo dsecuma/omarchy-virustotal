@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
 import "Model.js" as Model
 import "Scripts.js" as Scripts
 
@@ -134,6 +135,21 @@ Item {
     if (busy || connecting || (analysisActive && !analysisStalled)) return "busy"
     return "idle"
   }
+
+  // --- theme -----------------------------------------------------------------
+  // Yellow for "suspicious" and other warnings in the panel and the bar dot.
+  // Omarchy has no warning colour token, so this is the theme's own yellow
+  // when it has a real one (Model.themeYellow), else an amber that is lighter
+  // on dark themes and darker on light ones.
+  property string themeYellow: ""
+  readonly property color warningColor: themeYellow !== "" ? themeYellow
+    : Qt.hsla(0.11, 0.85, Color.foreground.hslLightness > 0.5 ? 0.62 : 0.4, 1)
+  // Omarchy reads colors.toml at startup and gets theme switches over IPC
+  // after replacing the theme directory, so a file watch would go stale:
+  // re-read the file whenever the base palette changes instead.
+  readonly property string paletteKey: String(Color.foreground) + String(Color.background)
+    + String(Color.accent) + String(Color.urgent)
+  onPaletteKeyChanged: themeColorsFile.reload()
 
   // --- private ---------------------------------------------------------------
   property int _openPanels: 0
@@ -334,6 +350,16 @@ Item {
     onLoaded: root.applyState(stateFile.text(), false)
     onLoadFailed: root.applyState("", true)
     onFileChanged: stateFile.reload()
+  }
+
+  // Read only, for themeYellow; the same file Omarchy's Color singleton reads.
+  FileView {
+    id: themeColorsFile
+    path: String(Color.currentThemePath || root.homeDir + "/.local/state/omarchy/current/theme") + "/colors.toml"
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.themeYellow = Model.themeYellow(themeColorsFile.text())
+    onLoadFailed: root.themeYellow = ""
   }
 
   function applyConfig(text, failed) {

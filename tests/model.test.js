@@ -52,7 +52,7 @@ test("detects hashes", () => {
   assert.strictEqual(kind("abc123"), "error")
 })
 
-test("recognizes hashes the panel must show in full", () => {
+test("recognizes MD5, SHA-1 and SHA-256 hashes", () => {
   assert.strictEqual(M.isHash("44D88612FEA8A8F36DE82E1278ABB02F"), true)
   assert.strictEqual(M.isHash("3395856ce81f2b7382dee72602f798b642f14140"), true)
   assert.strictEqual(M.isHash("275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"), true)
@@ -469,6 +469,50 @@ test("notifications and consent text", () => {
   assert.strictEqual(M.notificationFor(clean).urgency, "low")
   const msg = M.uploadConsentMessage({ name: "x.exe", size: 2048 })
   assert.ok(/x\.exe/.test(msg) && /2\.0 kB|2 kB/.test(msg) && /shared with the VirusTotal/.test(msg))
+})
+
+test("suspicious gets the exclamation triangle, malicious the octagon", () => {
+  const found = (verdict) => ({ status: "found", verdict: verdict, stats: M.normalizeStats(null) })
+  assert.strictEqual(M.verdictGlyph(found("suspicious")), M.Glyph.alert)
+  assert.strictEqual(M.verdictRole(found("suspicious")), "warning")
+  assert.strictEqual(M.verdictGlyph(found("malicious")), M.Glyph.alertOctagon)
+  assert.strictEqual(M.verdictRole(found("malicious")), "danger")
+  assert.strictEqual(M.verdictGlyph(found("undetected")), M.Glyph.shieldCheck)
+  const sus = M.resultFromReport("ip", "1.1.1.1", {
+    id: "1.1.1.1", last_analysis_stats: { malicious: 0, suspicious: 1, undetected: 30, harmless: 60 }, detections: []
+  })
+  assert.strictEqual(sus.verdict, "suspicious")
+  assert.strictEqual(M.notificationFor(sus).glyph, M.Glyph.alert)
+  assert.strictEqual(M.notificationFor(sus).urgency, "normal")
+})
+
+test("picks the theme's yellow only when it is one", () => {
+  // Values from Omarchy's own themes (themes/*/colors.toml).
+  assert.strictEqual(M.themeYellow('mode = "dark"\nred = "#f7768e"\nyellow = "#e0af68"\n'), "#e0af68")  // tokyo-night
+  assert.strictEqual(M.themeYellow('yellow = "#EBCB8B"\nbright_yellow = "#ebcb8b"'), "#ebcb8b")      // nord
+  assert.strictEqual(M.themeYellow('yellow = "#df8e1d"'), "#df8e1d")                                 // catppuccin-latte
+  assert.strictEqual(M.themeYellow('yellow = "#f9e2af"'), "#f9e2af")                                 // catppuccin
+  assert.strictEqual(M.themeYellow('yellow = "#c0a36e"'), "#c0a36e")                                 // kanagawa
+  assert.strictEqual(M.themeYellow('yellow = "#b91c1c"'), "")                                        // matte-black: red
+  assert.strictEqual(M.themeYellow('yellow = "#50f7d4"'), "")                                        // hackerman: cyan
+  assert.strictEqual(M.themeYellow('yellow = "#e97b3c"'), "")                                        // retro-82: orange
+  assert.strictEqual(M.themeYellow('yellow = "#cecece"'), "")                                        // vantablack: grey
+  assert.strictEqual(M.themeYellow('yellow = "#4a4a4a"'), "")                                        // white: grey
+  // Terminal-style palettes, and a non-yellow `yellow` falling back to color3.
+  assert.strictEqual(M.themeYellow("color3 = '#d7af5f'"), "#d7af5f")
+  assert.strictEqual(M.themeYellow('yellow = "#b91c1c"\ncolor3 = "#e5c07b"'), "#e5c07b")
+  // Only exact keys, the first value wins, and anything else gives "".
+  assert.strictEqual(M.themeYellow('bright_yellow = "#e0af68"\ncolor30 = "#e0af68"'), "")
+  assert.strictEqual(M.themeYellow('yellow = "#e0af68"\nyellow = "#b91c1c"'), "#e0af68")
+  assert.strictEqual(M.themeYellow('yellow = "#e0af6"'), "")
+  assert.strictEqual(M.themeYellow('yellow = "#e0af6899"'), "")
+  assert.strictEqual(M.themeYellow(""), "")
+  assert.strictEqual(M.themeYellow(undefined), "")
+  assert.strictEqual(M.isYellow("#ffff00"), true)
+  assert.strictEqual(M.isYellow("#ff8000"), false)
+  assert.strictEqual(M.isYellow("#80ff00"), false)
+  assert.strictEqual(M.isYellow("#ffffe0"), false)
+  assert.strictEqual(M.isYellow("yellow"), false)
 })
 
 test("glyphs are single Nerd Font code points", () => {

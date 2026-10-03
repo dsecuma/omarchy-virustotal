@@ -139,7 +139,7 @@ BarWidget {
           anchors.top: parent.top
           anchors.right: parent.right
           color: root.status === "malicious" ? root.urgent
-            : root.status === "suspicious" ? Qt.tint(root.urgent, Util.alpha(root.iconColor, 0.35))
+            : root.status === "suspicious" ? root.service.warningColor
             : Qt.darker(root.iconColor, 1.55)
         }
       }

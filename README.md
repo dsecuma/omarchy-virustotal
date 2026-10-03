@@ -10,10 +10,10 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 
 ## Features
 
-- **Bar icon** with a status dot: red when engines flagged a file as malicious, a softer tone for any other flag (suspicious detections or an AI insight), dimmed while a check is running.
+- **Bar icon** with a status dot: red when engines flagged a file as malicious, yellow for any other flag (suspicious detections or an AI insight), dimmed while a check is running.
 - **Scan tab**: paste a URL, domain, IP, MD5/SHA-1/SHA-256 hash or an absolute file path (`~/…` and `file://` work too).
   - Files are hashed locally; only the SHA-256 is looked up.
-  - The result card shows what VirusTotal returned: flagged/total engines, the per-category counts, the most common detection labels, the file type, the most severe AI insight, the full SHA-256 and a link to the full report.
+  - The result card shows what VirusTotal returned: flagged/total engines, the per-category counts, the most common detection labels, the file type, the most severe AI insight, the SHA-256 and a link to the full report. Malicious detections get a red stop sign, suspicious-only ones a yellow exclamation mark.
   - An unknown file (32 MB or smaller) can be uploaded for analysis, always after a confirmation dialog. The panel then follows the analysis until it finishes.
 - **Recent downloads**: the four newest files in your Downloads folder, each checked with one click.
 - **History tab**: the last 50 checks, kept across restarts.
@@ -23,7 +23,7 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 - **Agents tab**: one button adds the VirusTotal AI MCP server to every installed Omarchy coding agent and links a `virustotal` skill that tells them how to look things up and report. Each agent signs in with your Google account; no token is written to agent settings. See [Coding agents](#coding-agents).
 - **Ask &lt;agent&gt;**: hands a finished lookup or a download alert to your default Omarchy agent.
 - Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>5</kbd> switch tabs and <kbd>/</kbd> goes back to Scan. In History, <kbd>Del</kbd> (or <kbd>x</kbd>) clears it after a confirmation.
-- Follows your Omarchy theme; no hard-coded colours.
+- Follows your Omarchy theme. Warnings use the theme's own yellow; themes whose "yellow" is another colour (matte-black, vantablack, …) get an amber instead.
 
 ## Requirements
 

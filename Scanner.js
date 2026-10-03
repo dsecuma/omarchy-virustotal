@@ -527,7 +527,7 @@ function summaryNotification(record, summary, notifyAll) {
     for (var i = 0; i < s.flaggedFiles.length && i < 3; i++) lines.push(flaggedFileLine(s.flaggedFiles[i]))
     if (s.flaggedFiles.length > 3) lines.push("and " + (s.flaggedFiles.length - 3) + " more")
     return { urgency: s.withMalicious > 0 ? "critical" : "normal",
-             glyph: s.withMalicious > 0 ? Model.Glyph.alertOctagon : Model.Glyph.shieldAlert,
+             glyph: s.withMalicious > 0 ? Model.Glyph.alertOctagon : Model.Glyph.alert,
              title: "VirusTotal flagged " + plural(s.flagged, "file") + " in " + name,
              body: lines.join("\n") }
   }

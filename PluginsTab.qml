@@ -253,7 +253,7 @@ Column {
               id: pluginGlyph
               textFormat: Text.PlainText
               text: pluginRow.modelData.role === "danger" ? Model.Glyph.alertOctagon
-                : pluginRow.modelData.role === "warning" ? Model.Glyph.shieldAlert
+                : pluginRow.modelData.role === "warning" ? Model.Glyph.alert
                 : pluginRow.modelData.role === "ok" ? Model.Glyph.shieldCheck
                 : pluginRow.modelData.role === "pending" ? Model.Glyph.progressClock
                 : Model.Glyph.puzzle

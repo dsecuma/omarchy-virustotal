@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.1"
+var DEFAULT_VERSION = "1.1.2"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -643,7 +643,7 @@ function verdictGlyph(r) {
   }
   switch (r.verdict) {
   case "malicious": return Glyph.alertOctagon
-  case "suspicious": return Glyph.shieldAlert
+  case "suspicious": return Glyph.alert
   case "undetected": return Glyph.shieldCheck
   }
   return Glyph.shieldOutline
@@ -667,8 +667,7 @@ function summaryLine(r) {
   return line
 }
 
-// MD5, SHA-1 or SHA-256 in hex. The panel wraps these instead of eliding
-// them: a hash is always shown in full.
+// MD5, SHA-1 or SHA-256 in hex.
 function isHash(s) {
   return /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i.test(String(s === undefined || s === null ? "" : s))
 }
@@ -701,7 +700,7 @@ function notificationFor(r) {
     }
     if (insightFlags(r)) parts.push("VirusTotal AI insight: " + (r.insight.rawVerdict || r.insight.verdict) + ".")
     return { urgency: r.stats.malicious > 0 ? "critical" : "normal",
-             glyph: r.stats.malicious > 0 ? Glyph.alertOctagon : Glyph.shieldAlert,
+             glyph: r.stats.malicious > 0 ? Glyph.alertOctagon : Glyph.alert,
              title: "Flagged " + noun + ": " + name, body: parts.join(" ") }
   }
   if (r && r.status === "not_found") {
@@ -710,6 +709,47 @@ function notificationFor(r) {
   }
   return { urgency: "low", glyph: Glyph.shieldCheck, title: "No detections: " + name,
            body: "0 of " + denom + " security vendors flagged it." }
+}
+
+// --- theme -------------------------------------------------------------------
+
+// A #rrggbb colour whose hue is yellow or amber (33–65°), clearly saturated
+// and neither near black nor near white.
+function isYellow(hex) {
+  var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(hex || ""))
+  if (!m) return false
+  var r = parseInt(m[1], 16) / 255
+  var g = parseInt(m[2], 16) / 255
+  var b = parseInt(m[3], 16) / 255
+  var max = Math.max(r, g, b)
+  var min = Math.min(r, g, b)
+  var d = max - min
+  if (d === 0) return false
+  var l = (max + min) / 2
+  var s = d / (1 - Math.abs(2 * l - 1))
+  var h = max === r ? 60 * (((g - b) / d) % 6)
+    : max === g ? 60 * ((b - r) / d + 2)
+    : 60 * ((r - g) / d + 4)
+  if (h < 0) h += 360
+  return h >= 33 && h <= 65 && s >= 0.3 && l >= 0.25 && l <= 0.9
+}
+
+// The theme's own yellow from its colors.toml (`yellow`, or `color3` in
+// terminal-style palettes), lower-cased, or "" when it has none. Omarchy's
+// Color singleton exposes no yellow, and several themes' "yellow" is not one
+// (matte-black's is red, lumon's blue, vantablack's grey): those return "".
+function themeYellow(raw) {
+  var found = {}
+  var lines = String(raw || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var m = /^\s*(yellow|color3)\s*=\s*["']?(#[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/.exec(lines[i])
+    if (m && !found[m[1]]) found[m[1]] = m[2]
+  }
+  var candidates = [found.yellow, found.color3]
+  for (var j = 0; j < candidates.length; j++) {
+    if (isYellow(candidates[j])) return candidates[j].toLowerCase()
+  }
+  return ""
 }
 
 // --- errors ------------------------------------------------------------------

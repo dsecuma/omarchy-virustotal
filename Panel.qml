@@ -78,9 +78,9 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
   readonly property color dim: Qt.darker(foreground, 1.55)
-  // The theme has no warning token: a softened urgent keeps "suspicious"
-  // distinct from "malicious" in every palette.
-  readonly property color warning: Qt.tint(urgent, Util.alpha(foreground, 0.35))
+  // Yellow for "suspicious" and other warnings: the theme's own yellow or an
+  // amber (Service.warningColor), so it never reads as "malicious" red.
+  readonly property color warning: service && service.warningColor !== undefined ? service.warningColor : dim
   readonly property color cardBorder: Util.alpha(foreground, 0.16)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property color resultColor: roleColor(Model.verdictRole(result))
@@ -123,8 +123,8 @@ Panel {
     return parts.join(" \u00b7 ")
   }
 
-  // The full SHA-256 on its own line, unless the target line above already is
-  // that hash.
+  // The SHA-256 on its own line (elided in the middle when it doesn't fit),
+  // unless the target line above already is that hash.
   function resultSha(r) {
     if (!r || !r.sha256 || Model.displayTarget(r) === r.sha256) return ""
     return "SHA-256 " + r.sha256
@@ -567,7 +567,7 @@ Panel {
           // ---- header: mark, title and tabs; status below ---------------------
           Column {
             width: parent.width
-            spacing: Style.space(2)
+            spacing: Style.space(8)
 
             Item {
               width: parent.width
@@ -782,7 +782,8 @@ Panel {
             // ---- watcher alert ------------------------------------------
             BorderSurface {
               id: alertCard
-              readonly property color tone: root.alert && root.alert.stats && root.alert.stats.malicious > 0 ? root.urgent : root.warning
+              readonly property bool malicious: !!root.alert && !!root.alert.stats && root.alert.stats.malicious > 0
+              readonly property color tone: alertCard.malicious ? root.urgent : root.warning
               visible: !!root.alert
               width: parent.width
               implicitHeight: alertColumn.implicitHeight + alertCard.contentTopInset + alertCard.contentBottomInset
@@ -805,7 +806,7 @@ Panel {
                   Text {
                     id: alertGlyph
                     textFormat: Text.PlainText
-                    text: Model.verdictGlyph(root.alert)
+                    text: alertCard.malicious ? Model.Glyph.alertOctagon : Model.Glyph.alert
                     color: alertCard.tone
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.iconLarge
@@ -1071,9 +1072,7 @@ Panel {
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
-                    // A hash wraps instead: it is never shown shortened.
-                    elide: Model.isHash(text) ? Text.ElideNone : Text.ElideMiddle
-                    wrapMode: Model.isHash(text) ? Text.WrapAnywhere : Text.NoWrap
+                    elide: Text.ElideMiddle
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
@@ -1120,9 +1119,9 @@ Panel {
                     textFormat: Text.PlainText
                     width: parent.width
                     text: root.result ? root.insightTitle(root.result.insight) : ""
-                    color: root.result && root.result.insight
-                      && (root.result.insight.verdict === "malicious" || root.result.insight.verdict === "suspicious")
-                      ? root.warning : root.dim
+                    color: !root.result || !root.result.insight ? root.dim
+                      : root.result.insight.verdict === "malicious" ? root.urgent
+                      : root.result.insight.verdict === "suspicious" ? root.warning : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     font.bold: true
@@ -1161,7 +1160,7 @@ Panel {
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                  wrapMode: Text.WrapAnywhere
+                  elide: Text.ElideMiddle
                 }
 
                 Flow {
@@ -1404,8 +1403,7 @@ Panel {
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
-                        elide: Model.isHash(text) ? Text.ElideNone : Text.ElideMiddle
-                        wrapMode: Model.isHash(text) ? Text.WrapAnywhere : Text.NoWrap
+                        elide: Text.ElideMiddle
                       }
 
                       Text {
