@@ -526,5 +526,10 @@ test("glyphs are single Nerd Font code points", () => {
   }
 })
 
+test("DEFAULT_VERSION matches manifest.json", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"))
+  assert.strictEqual(M.DEFAULT_VERSION, manifest.version)
+})
+
 console.log(passed + " passed, " + failed + " failed")
 process.exit(failed ? 1 : 0)

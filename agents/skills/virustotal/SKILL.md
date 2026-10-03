@@ -18,7 +18,8 @@ Use the first option that works:
    not signed in, tell the user how to sign in, then continue with option 2
    if it is available:
    - Claude Code and Antigravity: type `/mcp`, pick virustotal, choose
-     Authenticate.
+     Authenticate. In Antigravity, paste the code from the browser into that
+     dialog, not into the chat.
    - Codex: `codex mcp login virustotal`. OpenCode: `opencode mcp auth virustotal`.
      Cursor CLI: `cursor-agent mcp login virustotal`.
    - GitHub Copilot: `/mcp auth virustotal`. Grok: `/mcps`.
@@ -127,7 +128,7 @@ curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
   -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
   "https://ai.virustotal.com/api/v3/ip_addresses/IP"
 
-# An analysis the plugin started (the ID is shown in the panel)
+# An analysis, by the ID a submission returned
 curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
   -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
   "https://ai.virustotal.com/api/v3/analyses/ANALYSIS_ID"
