@@ -174,9 +174,10 @@ Panel {
     else if (state === "invalid") items.push("reconnect", "disconnect")
     else if (state === "present" || state === "valid") items.push("check", "disconnect")
     items.push("watcher")
-    if (s.watcherEnabled) items.push("notifyAll")
     items.push("pluginScan")
     if (s.pluginScanEnabled) items.push("pluginUpload")
+    // Shared by the Downloads watcher and the plugin scanner.
+    if (s.watcherEnabled || s.pluginScanEnabled) items.push("notifyAll")
     return items
   }
 
@@ -1606,19 +1607,6 @@ Panel {
               onClicked: root.activateSetting("watcher")
             }
 
-            Toggle {
-              visible: !!root.service && root.service.watcherEnabled
-              width: parent.width
-              label: "Notify for every checked file"
-              description: "Otherwise only downloads flagged by VirusTotal notify."
-              checked: !!root.service && root.service.notifyAll
-              hasCursor: root.settingHasCursor("notifyAll")
-              foreground: root.foreground
-              fontFamily: root.fontFamily
-              onHovered: function(h) { if (h) root.hoverSetting("notifyAll") }
-              onClicked: root.activateSetting("notifyAll")
-            }
-
             Text {
               textFormat: Text.PlainText
               visible: text !== ""
@@ -1814,6 +1802,37 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onModified: function(v) { if (root.service) root.service.setMaxParallel(v) }
+              }
+            }
+
+            // Shared by the Downloads watcher and the plugin scanner, so it
+            // shows while either one is on.
+            Column {
+              visible: !!root.service && (root.service.watcherEnabled || root.service.pluginScanEnabled)
+              width: parent.width
+              spacing: Style.space(10)
+
+              PanelSeparator {
+                width: parent.width
+                foreground: root.foreground
+              }
+
+              PanelSectionHeader {
+                text: "NOTIFICATIONS"
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+              }
+
+              Toggle {
+                width: parent.width
+                label: "Notify for every checked file"
+                description: "Also notify when VirusTotal flags nothing, for new downloads and for finished plugin checks. Otherwise only flagged files notify."
+                checked: !!root.service && root.service.notifyAll
+                hasCursor: root.settingHasCursor("notifyAll")
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onHovered: function(h) { if (h) root.hoverSetting("notifyAll") }
+                onClicked: root.activateSetting("notifyAll")
               }
             }
 
