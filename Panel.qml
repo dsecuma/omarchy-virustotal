@@ -120,8 +120,14 @@ Panel {
     var ago = r.analysisDate ? Model.timeAgo(r.analysisDate, root.now) : ""
     if (ago !== "") parts.push("Analyzed " + ago)
     if (r.kind === "file" && r.size >= 0) parts.push(Model.formatBytes(r.size))
-    if (r.sha256) parts.push("SHA-256 " + String(r.sha256).slice(0, 12) + "\u2026")
     return parts.join(" \u00b7 ")
+  }
+
+  // The full SHA-256 on its own line, unless the target line above already is
+  // that hash.
+  function resultSha(r) {
+    if (!r || !r.sha256 || Model.displayTarget(r) === r.sha256) return ""
+    return "SHA-256 " + r.sha256
   }
 
   function insightTitle(insight) {
@@ -522,9 +528,13 @@ Panel {
     open: root.opened
     focusTarget: root.tab === "scan" && root.ready && !root.confirmOpen ? searchField : keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(420))
+    // Ceil, never round: fittedContentHeight() rounds to whole pixels, so a
+    // fractional column height could leave the viewport up to half a pixel
+    // short, and at fractional scales the clip then ate the whole bottom
+    // border of the last button. The column's bottomPadding adds slack.
     contentHeight: panel.fittedContentHeight(root.confirmOpen
-      ? Math.max(column.implicitHeight, Style.space(300))
-      : column.implicitHeight, Style.space(680))
+      ? Math.max(Math.ceil(column.implicitHeight), Style.space(300))
+      : Math.ceil(column.implicitHeight), Style.space(680))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -541,7 +551,7 @@ Panel {
         id: flick
         anchors.fill: parent
         contentWidth: width
-        contentHeight: column.implicitHeight
+        contentHeight: Math.ceil(column.implicitHeight)
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         flickableDirection: Flickable.VerticalFlick
@@ -552,32 +562,33 @@ Panel {
           id: column
           width: flick.width
           spacing: Style.space(12)
+          bottomPadding: Style.space(4)
 
-          // ---- header: mark, status and tabs --------------------------------
-          Item {
+          // ---- header: mark, title and tabs; status below ---------------------
+          Column {
             width: parent.width
-            implicitHeight: Math.max(headerText.implicitHeight, tabGroup.implicitHeight, headerIcon.height)
+            spacing: Style.space(2)
 
-            VirusTotalIcon {
-              id: headerIcon
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              iconSize: Style.space(20)
-              color: root.foreground
-            }
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(headerTitle.implicitHeight, tabGroup.implicitHeight, headerIcon.height)
 
-            Column {
-              id: headerText
-              anchors.left: headerIcon.right
-              anchors.leftMargin: Style.space(10)
-              anchors.right: tabGroup.left
-              anchors.rightMargin: Style.space(8)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(1)
+              VirusTotalIcon {
+                id: headerIcon
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                iconSize: Style.space(20)
+                color: root.foreground
+              }
 
               Text {
+                id: headerTitle
+                anchors.left: headerIcon.right
+                anchors.leftMargin: Style.space(10)
+                anchors.right: tabGroup.left
+                anchors.rightMargin: Style.space(8)
+                anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
-                width: parent.width
                 text: "VirusTotal"
                 color: root.foreground
                 font.family: root.fontFamily
@@ -586,35 +597,39 @@ Panel {
                 elide: Text.ElideRight
               }
 
-              Text {
-                textFormat: Text.PlainText
-                width: parent.width
-                text: root.statusLine()
-                color: root.service && root.service.credentialState === "invalid" ? root.urgent : root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
+              ButtonGroup {
+                id: tabGroup
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(4)
+                focusable: false
+                value: root.tab
+                options: [
+                  { value: "scan", label: "", icon: Model.Glyph.magnify, tooltip: "Scan" },
+                  { value: "history", label: "", icon: Model.Glyph.history, tooltip: "History" },
+                  { value: "plugins", label: "", icon: Model.Glyph.puzzle, tooltip: "Plugins" },
+                  { value: "agents", label: "", icon: Model.Glyph.robot, tooltip: "Agents" },
+                  { value: "settings", label: "", icon: Model.Glyph.cog, tooltip: "Settings" }
+                ]
+                foreground: root.foreground
+                background: "transparent"
+                fontFamily: root.fontFamily
+                onChanged: function(value) { root.setTab(value) }
               }
             }
 
-            ButtonGroup {
-              id: tabGroup
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(4)
-              focusable: false
-              value: root.tab
-              options: [
-                { value: "scan", label: "", icon: Model.Glyph.magnify, tooltip: "Scan" },
-                { value: "history", label: "", icon: Model.Glyph.history, tooltip: "History" },
-                { value: "plugins", label: "", icon: Model.Glyph.puzzle, tooltip: "Plugins" },
-                { value: "agents", label: "", icon: Model.Glyph.robot, tooltip: "Agents" },
-                { value: "settings", label: "", icon: Model.Glyph.cog, tooltip: "Settings" }
-              ]
-              foreground: root.foreground
-              background: "transparent"
-              fontFamily: root.fontFamily
-              onChanged: function(value) { root.setTab(value) }
+            // Its own full-width line, aligned under the title: beside five
+            // tabs only ~25 caption characters fit, so the status was elided.
+            // It wraps instead, so it is never cut whatever the font size.
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              leftPadding: headerIcon.width + Style.space(10)
+              text: root.statusLine()
+              color: root.service && root.service.credentialState === "invalid" ? root.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.Wrap
             }
           }
 
@@ -1056,7 +1071,9 @@ Panel {
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
-                    elide: Text.ElideMiddle
+                    // A hash wraps instead: it is never shown shortened.
+                    elide: Model.isHash(text) ? Text.ElideNone : Text.ElideMiddle
+                    wrapMode: Model.isHash(text) ? Text.WrapAnywhere : Text.NoWrap
                     anchors.verticalCenter: parent.verticalCenter
                   }
                 }
@@ -1134,6 +1151,17 @@ Panel {
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  visible: text !== ""
+                  width: parent.width
+                  text: root.resultSha(root.result)
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  wrapMode: Text.WrapAnywhere
                 }
 
                 Flow {
@@ -1376,7 +1404,8 @@ Panel {
                         color: root.foreground
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.bodySmall
-                        elide: Text.ElideMiddle
+                        elide: Model.isHash(text) ? Text.ElideNone : Text.ElideMiddle
+                        wrapMode: Model.isHash(text) ? Text.WrapAnywhere : Text.NoWrap
                       }
 
                       Text {

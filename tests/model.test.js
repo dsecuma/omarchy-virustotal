@@ -52,6 +52,17 @@ test("detects hashes", () => {
   assert.strictEqual(kind("abc123"), "error")
 })
 
+test("recognizes hashes the panel must show in full", () => {
+  assert.strictEqual(M.isHash("44D88612FEA8A8F36DE82E1278ABB02F"), true)
+  assert.strictEqual(M.isHash("3395856ce81f2b7382dee72602f798b642f14140"), true)
+  assert.strictEqual(M.isHash("275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"), true)
+  assert.strictEqual(M.isHash("setup-275a021bbfb6489e54d471899f7db9d1.sh"), false)
+  assert.strictEqual(M.isHash("example.com"), false)
+  assert.strictEqual(M.isHash(""), false)
+  assert.strictEqual(M.isHash(undefined), false)
+  assert.strictEqual(M.isHash(null), false)
+})
+
 test("detects URLs", () => {
   assert.strictEqual(kind("https://example.com/a?b=c"), "url:https://example.com/a?b=c")
   assert.strictEqual(kind("hxxps://evil[.]example/payload"), "url:https://evil.example/payload")
