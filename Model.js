@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.0"
+var DEFAULT_VERSION = "1.1.1"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -303,7 +303,7 @@ function detectTargetType(input, homeDir) {
 
   s = refang(s)
 
-  if (/^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i.test(s)) return { kind: "hash", value: s.toLowerCase() }
+  if (isHash(s)) return { kind: "hash", value: s.toLowerCase() }
 
   var scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(s)
   if (scheme) {
@@ -665,6 +665,12 @@ function summaryLine(r) {
     + " \u00b7 Harmless " + s.harmless + " \u00b7 Undetected " + s.undetected
   if (flaggedCount(r) === 0) line += ". No detections is not a guarantee of safety."
   return line
+}
+
+// MD5, SHA-1 or SHA-256 in hex. The panel wraps these instead of eliding
+// them: a hash is always shown in full.
+function isHash(s) {
+  return /^(?:[a-f0-9]{32}|[a-f0-9]{40}|[a-f0-9]{64})$/i.test(String(s === undefined || s === null ? "" : s))
 }
 
 function displayTarget(r) {

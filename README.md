@@ -10,25 +10,25 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 
 ## Features
 
-- **Bar icon** with a status dot: red when engines flagged a download as malicious, a softer tone when they only flagged it as suspicious, dimmed while a check is running.
+- **Bar icon** with a status dot: red when engines flagged a file as malicious, a softer tone for any other flag (suspicious detections or an AI insight), dimmed while a check is running.
 - **Scan tab**: paste a URL, domain, IP, MD5/SHA-1/SHA-256 hash or an absolute file path (`~/…` and `file://` work too).
   - Files are hashed locally; only the SHA-256 is looked up.
-  - The result card shows what VirusTotal returned: flagged/total engines, the per-category counts, the most common detection labels, the file type, the most severe AI insight and a link to the full report.
+  - The result card shows what VirusTotal returned: flagged/total engines, the per-category counts, the most common detection labels, the file type, the most severe AI insight, the full SHA-256 and a link to the full report.
   - An unknown file (32 MB or smaller) can be uploaded for analysis, always after a confirmation dialog. The panel then follows the analysis until it finishes.
-- **Recent downloads**: one click checks one of the newest files in your Downloads folder.
+- **Recent downloads**: the four newest files in your Downloads folder, each checked with one click.
 - **History tab**: the last 50 checks, kept across restarts.
 - The plugin never issues its own verdict: headlines are the raw counts (e.g. `2/91 flagged`) and AI insights are shown as returned.
 - **Downloads watcher** (off by default): looks up each new download and notifies you when VirusTotal engines or AI insights flag it. It never uploads anything by itself.
 - **Plugin scanner** (off by default): notices when an Omarchy plugin is installed or updated and looks up every file of it on VirusTotal, several requests at a time within the API quota. Unknown files are uploaded only if you turned that on.
 - **Agents tab**: one button adds the VirusTotal AI MCP server to every installed Omarchy coding agent and links a `virustotal` skill that tells them how to look things up and report. Each agent signs in with your Google account; no token is written to agent settings. See [Coding agents](#coding-agents).
 - **Ask &lt;agent&gt;**: hands a finished lookup or a download alert to your default Omarchy agent.
-- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>5</kbd> switch tabs.
+- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>5</kbd> switch tabs and <kbd>/</kbd> goes back to Scan. In History, <kbd>Del</kbd> (or <kbd>x</kbd>) clears it after a confirmation.
 - Follows your Omarchy theme; no hard-coded colours.
 
 ## Requirements
 
 - Omarchy with the Quattro shell.
-- `curl`, `sha256sum`, `stat` and `date` (curl plus coreutils, present on a standard Omarchy install).
+- `curl`, `sha256sum`, `stat` and `date` (curl plus coreutils, present on a standard Omarchy install). The plugin scanner also needs `find`, `awk` and `head`, and reads a plugin's commit with `git` when it is installed.
 - For the Downloads watcher and the recent downloads list: the `Qt.labs.folderlistmodel` QML module, part of `qt6-declarative`, which Quickshell already depends on. Without it the rest of the plugin keeps working.
 - Notifications use `omarchy-notification-send` (bundled with Omarchy), or `notify-send` as a fallback.
 - For the Agents tab: `jq` to read and edit the agents' JSON settings and `wl-copy` for the Copy buttons (both ship with Omarchy). Without `jq`, agents with JSON settings show as unreadable and are left untouched.
@@ -80,12 +80,12 @@ Enable it in **Settings → Check new downloads**. It watches the folder from `X
 
 Enable it in **Settings → Plugins → Check installed plugins**. It watches `~/.config/omarchy/plugins` (the folder `omarchy plugin add` installs into), and also checks it every 10 minutes and whenever you open the panel.
 
-- **What counts as a change**: a new plugin folder, or a different git commit, version or file list in an existing one. Clicking **Rescan** on a plugin, or **Rescan all**, checks it again.
+- **What counts as a change**: a new plugin folder, or a different git commit, version or file list in an existing one. The refresh button on a plugin's row (**Check this plugin again**), or **Rescan all**, checks it again.
 - **The first run** takes a baseline: every installed plugin is scanned, without "new plugin" notifications.
 - **What is sent**: each file is hashed locally and only its SHA-256 is looked up. `.git/`, symlinks and empty files are skipped. Files shared by several plugins are looked up once. A file with a report is looked up again after 7 days; an unknown file after 1 hour.
 - **Uploads** happen only when **Upload unknown plugin files automatically** is on. Turning it on asks for your consent once, in a dialog. Uploads are standard, non-private submissions (see [Privacy and uploads](#privacy-and-uploads)). Files above 32 MB are never uploaded, and each file is hashed again right before sending. After an upload the scanner follows the analysis and looks the file up again a little later to collect AI insights.
 - **What counts as flagged**: only VirusTotal's own results. Engines flagged the file as malicious or suspicious, or a Code Insight / AI insight returned a malicious or suspicious verdict. The plugin makes no judgement of its own.
-- **Alerts**: a notification when a plugin is added or updated, and one when its scan finds flagged files (for example `VirusTotal flagged 2 files in <plugin>`; with **Notify for every checked file** also clean results). Flagged files also go into the history and turn the bar dot red.
+- **Alerts**: a notification when a plugin is added or updated, and one when its scan finds flagged files (for example `VirusTotal flagged 2 files in <plugin>`; with **Notify for every checked file** also clean results). Flagged files also go into the history and light up the bar dot.
 - **Plugins tab**: every installed plugin with its status, flagged/total counts and the remaining quota. Click a plugin to list its files; click a file to open its VirusTotal report.
 
 ### Engine and quota
@@ -95,9 +95,10 @@ Enable it in **Settings → Plugins → Check installed plugins**. It watches `~
 | VirusTotal AI (default) | The VTAI agent token from **Connect** | 48 lookups/min and 900/day; 16 uploads/min and 450/day |
 | Classic API v3 | Your VirusTotal API key | 4 requests/min and 500/day (public key limits; adjustable for premium keys) |
 
+- VirusTotal AI allows 60 lookups per minute and 1,000 per day, plus 20 uploads per minute and 500 per day, per agent token. The scanner stays below that because the Scan tab and the Downloads watcher use the same token.
 - Up to 4 requests run in parallel (**Parallel requests**, 1–8). A shared token bucket keeps them within the per-minute and per-day limits. When the daily quota runs out, the scan waits until 00:00 UTC.
 - If VirusTotal answers with a rate limit error, the scanner pauses and retries. A rejected key or token stops the scan until you fix it.
-- **The API key** is only used by the plugin scanner; the Scan tab and the Downloads watcher always use VTAI. It is saved to `~/.config/omarchy-virustotal/vt-apikey.header` with mode 600. The key reaches the shell through stdin and `curl` reads it with `-H @file`, so it never appears on a command line. **Delete** removes the file.
+- **The API key** is only used by the plugin scanner; the Scan tab and the Downloads watcher always use VTAI. It is saved to `~/.config/omarchy-virustotal/vt-apikey.header` with mode 600. The key reaches the shell through stdin and `curl` reads it with `-H @file`, so it never appears on a command line. The trash button next to it removes the file.
 
 ## Coding agents
 
@@ -151,9 +152,9 @@ Once a default agent is chosen in Omarchy (**Change** opens Omarchy's picker), f
 | Path | Contents |
 |---|---|
 | `~/.config/vtai/auth.header` | VTAI agent token (shared with other VTAI tools) |
-| `~/.config/omarchy-virustotal/config.json` | Watcher and plugin scanner settings |
+| `~/.config/omarchy-virustotal/config.json` | Settings: Downloads watcher, plugin scanner and **Ask** buttons |
 | `~/.config/omarchy-virustotal/vt-apikey.header` | Optional classic VirusTotal API key (mode 600) |
-| `~/.local/state/omarchy-virustotal/history.json` | Check history and the last watcher alert |
+| `~/.local/state/omarchy-virustotal/history.json` | Check history and the last alert |
 | `~/.local/state/omarchy-virustotal/plugins.json` | Plugin scanner state: known plugins, per-file results and quota counters |
 | `~/.local/state/omarchy-virustotal/agents.json` | What the Agents tab added: MCP entries, backups and skill links |
 | `~/.agents/skills/virustotal` and the other skill folders above | Symlinks to the plugin's `virustotal` skill (after **Link**) |
@@ -194,7 +195,7 @@ Once a default agent is chosen in Omarchy (**Change** opens Omarchy's picker), f
 - **"Required tools not found"**: install the listed commands and reopen the panel.
 - **"Token rejected"**: the token was revoked or expired. Use **Reconnect** in the panel.
 - **The watcher option is disabled**: the `Qt.labs.folderlistmodel` module is missing (install `qt6-declarative`), or the bar doesn't run plugin services.
-- **The plugin scanner is paused**: open the Plugins tab to see why (not connected, key missing or rejected, quota used up until 00:00 UTC).
+- **The plugin scanner is paused**: open the Plugins tab to see why (not connected, tools missing, key missing or rejected, quota used up until 00:00 UTC).
 - **An agent shows "Couldn't read …"**: the plugin could not parse that agent's settings, or `jq` is missing, so it changed nothing. Use **Copy** or **Setup guide** on its row to add the entry by hand.
 - **An agent can't use VirusTotal**: it has to sign in once. Use **Sign in** on its row, or VirusTotal's **Setup guide** for that agent.
 - **There is no Ask button**: choose a default agent with **Change** in the Agents tab, check that it is installed and that **Show an "Ask" button on results** is on. The button only shows on finished lookups and download alerts.
@@ -230,4 +231,8 @@ qmllint -I "$OMARCHY_PATH/shell" *.qml
 | `Scripts.js` | POSIX `sh` snippets; untrusted values only travel as arguments |
 | `agents/skills/virustotal/SKILL.md` | The `virustotal` skill the Agents tab links into the agents' skill folders |
 
-CI (`.github/workflows/ci.yml`) runs the tests, checks the manifest, rejects hex colours, symlinks and executable files, and runs Omarchy's plugin validator.
+There is no CI: before sending a change, run the commands above and check that the QML has no hex colours and that every file is a regular, non-executable file (`git ls-files -s` shows only mode `100644`).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
