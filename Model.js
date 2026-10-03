@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.0.0"
+var DEFAULT_VERSION = "1.1.0"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -58,7 +58,10 @@ var Glyph = {
   eye: cp(0xF0208),
   earth: cp(0xF01E7),
   copy: cp(0xF018F),
-  puzzle: cp(0xF0431)
+  puzzle: cp(0xF0431),
+  robot: cp(0xF06A9),
+  plus: cp(0xF0415),
+  linkOff: cp(0xF033A)
 }
 
 // --- small utilities ---------------------------------------------------------
@@ -889,7 +892,11 @@ function normalizeConfig(j) {
     pluginBackend: PLUGIN_BACKENDS.indexOf(c.pluginBackend) >= 0 ? c.pluginBackend : "vtai",
     maxParallel: intSetting(c.maxParallel, 1, 8, 4),
     classicPerMin: intSetting(c.classicPerMin, 1, 100000, 4),
-    classicPerDay: intSetting(c.classicPerDay, 1, 10000000, 500)
+    classicPerDay: intSetting(c.classicPerDay, 1, 10000000, 500),
+    // "Ask <agent>" buttons (on unless turned off) and the one-time
+    // auto-approve warning.
+    agentButtons: c.agentButtons !== false,
+    agentHandoffAck: c.agentHandoffAck === true
   }
 }
 

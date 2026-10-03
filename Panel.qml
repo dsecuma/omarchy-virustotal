@@ -3,10 +3,11 @@ import QtQuick.Controls
 import Quickshell
 import qs.Commons
 import qs.Ui
+import "Agents.js" as Agents
 import "Model.js" as Model
 
 // VirusTotal panel: lookups, consented uploads, history, installed-plugin
-// checks (PluginsTab.qml) and settings.
+// checks (PluginsTab.qml), coding agents (AgentsTab.qml) and settings.
 //
 // All state and I/O live in Service.qml; BarWidget.qml injects it as
 // `service`. This file renders that state and forwards user actions. Every
@@ -20,14 +21,22 @@ Panel {
   property var hostWidget: null
   property var service: null
 
-  // scan | history | plugins | settings
+  // scan | history | plugins | agents | settings
   property string tab: "scan"
-  // upload | disconnect | clear | autoUpload, or "" when no dialog is open
+  // upload | disconnect | clear | autoUpload | agentsConnect | agentRemove |
+  // agentHandoff, or "" when no dialog is open
   property string confirmPurpose: ""
   property string _confirmSha: ""
+  // What an agent dialog listed: the connect plan, the agent and the steps
+  // to remove, or the result to hand off.
+  property var _confirmPlan: null
+  property string _confirmAgent: ""
+  property var _confirmSteps: []
+  property var _confirmResult: null
   property int historyIndex: 0
   property int settingsIndex: 0
   property int pluginsIndex: 0
+  property int agentsIndex: 0
   property bool cursorActive: false
   property real now: Date.now()
   property var _notifiedService: null
@@ -45,6 +54,9 @@ Panel {
   readonly property var alert: service && service.lastAlert && !service.alertAcknowledged ? service.lastAlert : null
   readonly property bool tracking: !!service && !!result && service.analysisActive === true
     && service.analysisSha === result.sha256
+  readonly property var agents: service ? service.agents : null
+  // "Ask <agent>" needs an installed default agent and the setting on.
+  readonly property bool askAvailable: !!agents && agents.canHandoff === true && !!service && service.agentButtons === true
   // Result actions. The row's visibility must not read the buttons' `visible`:
   // a child reports false while its parent is hidden, so the row never shows.
   readonly property bool showOpenAction: !!result && String(result.reportUrl || "") !== ""
@@ -52,9 +64,12 @@ Panel {
   readonly property bool showStatusAction: !!result && connected
     && ((result.status === "analyzing" && !tracking) || result.status === "unknown_submission")
   readonly property bool showAgainAction: tracking && !!service && service.analysisStalled === true
-  readonly property var tabs: ["scan", "history", "plugins", "settings"]
+  readonly property bool showAskAction: askAvailable && !!result && (result.status === "found" || result.status === "not_found")
+  readonly property bool showAlertAsk: askAvailable && !!alert
+  readonly property var tabs: ["scan", "history", "plugins", "agents", "settings"]
   readonly property var scanner: service ? service.scanner : null
   readonly property var pluginRows: scanner && scanner.plugins ? scanner.plugins : []
+  readonly property var agentItems: agentsTab.cursorItems
   // Fields that consume Return/arrows themselves; the key catcher stands down.
   readonly property bool fieldFocused: searchField.activeFocus || apiKeyField.activeFocus
     || parallelField.field.activeFocus || perMinField.field.activeFocus || perDayField.field.activeFocus
@@ -215,6 +230,7 @@ Panel {
       root.tab = t
       flick.contentY = 0
     }
+    if (t === "agents" && root.agents) root.agents.probe()
     Qt.callLater(root.restoreFocus)
   }
 
@@ -229,11 +245,53 @@ Panel {
       if (!root.result || !root.result.canUpload) return
       root._confirmSha = String(root.result.sha256 || "")
     }
-    // Consent and disconnect default to Cancel; clearing history mirrors
-    // the clipboard's default.
+    // Consent, disconnect and agent changes default to Cancel; clearing
+    // history mirrors the clipboard's default.
     confirmDialog.selectedIndex = purpose === "clear" ? 1 : 0
     root.confirmPurpose = purpose
     Qt.callLater(root.restoreFocus)
+  }
+
+  // From AgentsTab: "agentsConnect" or "agentRemove" (id = agent).
+  function askAgentConfirm(purpose, id) {
+    var m = root.agents
+    if (!m || m.busy) return
+    if (purpose === "agentsConnect") {
+      var plan = m.connectPlan()
+      if (plan.empty) {
+        m.setMessage(Agents.connectMessage(plan), "muted")
+        return
+      }
+      root._confirmPlan = plan
+    } else if (purpose === "agentRemove") {
+      var steps = Agents.removeSteps(Agents.rowById(m.rows, id))
+      if (!steps.length) return
+      root._confirmAgent = id
+      root._confirmSteps = steps
+    } else {
+      return
+    }
+    root.askConfirm(purpose)
+  }
+
+  // "Ask <agent>" on a result or a download alert. The first time, the
+  // auto-approve warning comes first.
+  function askAgent(r) {
+    var s = root.service
+    if (!s || !r || !root.agents) return
+    if (s.agentHandoffAck) {
+      root.agents.handoff(r)
+      return
+    }
+    root._confirmResult = Model.copy(r)
+    root.askConfirm("agentHandoff")
+  }
+
+  function clearAgentConfirm() {
+    root._confirmPlan = null
+    root._confirmAgent = ""
+    root._confirmSteps = []
+    root._confirmResult = null
   }
 
   function resolveConfirm(accepted) {
@@ -250,9 +308,17 @@ Panel {
         root.historyIndex = 0
       } else if (purpose === "autoUpload") {
         s.setPluginAutoUpload(true)
+      } else if (purpose === "agentsConnect" && root._confirmPlan) {
+        s.agents.connectAll(root._confirmPlan)
+      } else if (purpose === "agentRemove" && root._confirmAgent !== "") {
+        s.agents.remove(root._confirmAgent, root._confirmSteps)
+      } else if (purpose === "agentHandoff" && root._confirmResult) {
+        s.setAgentHandoffAck(true)
+        s.agents.handoff(root._confirmResult)
       }
     }
     root._confirmSha = ""
+    root.clearAgentConfirm()
     Qt.callLater(root.restoreFocus)
   }
 
@@ -270,12 +336,19 @@ Panel {
         + "as a standard, non-private submission: it is shared with the VirusTotal security community and partners. "
         + "Don't turn this on if you keep private plugins with credentials or internal code."
     }
+    if (root.confirmPurpose === "agentsConnect") return Agents.connectMessage(root._confirmPlan)
+    if (root.confirmPurpose === "agentRemove")
+      return Agents.removeMessage(root.agents ? Agents.rowById(root.agents.rows, root._confirmAgent) : null)
+    if (root.confirmPurpose === "agentHandoff") return Agents.handoffMessage(root.agents ? root.agents.defaultName : "")
     return ""
   }
 
   function confirmLabel() {
     if (root.confirmPurpose === "upload" || root.confirmPurpose === "autoUpload") return "Upload"
     if (root.confirmPurpose === "disconnect") return "Disconnect"
+    if (root.confirmPurpose === "agentsConnect") return "Connect"
+    if (root.confirmPurpose === "agentRemove") return "Remove"
+    if (root.confirmPurpose === "agentHandoff") return "Ask"
     return "Clear"
   }
 
@@ -319,6 +392,9 @@ Panel {
       root.settingsIndex = Math.max(0, Math.min(root.settingsItems.length - 1, root.settingsIndex + dy))
     } else if (root.tab === "plugins" && root.pluginRows.length > 0) {
       root.pluginsIndex = Math.max(0, Math.min(root.pluginRows.length - 1, root.pluginsIndex + dy))
+    } else if (root.tab === "agents" && root.agentItems.length > 0) {
+      root.agentsIndex = Math.max(0, Math.min(root.agentItems.length - 1, root.agentsIndex + dy))
+      root.scrollItemIntoView(agentsTab.itemAt(root.agentsIndex))
     }
   }
 
@@ -335,11 +411,14 @@ Panel {
       var row = root.pluginRows[root.pluginsIndex]
       if (root.cursorActive && row) pluginsTab.toggle(row.id)
       else root.cursorActive = true
+    } else if (root.tab === "agents") {
+      if (root.cursorActive) agentsTab.activate(root.agentItems[root.agentsIndex])
+      else root.cursorActive = true
     }
   }
 
   function handleTextKey(t) {
-    if (t === "1" || t === "2" || t === "3" || t === "4") {
+    if (t.length === 1 && t >= "1" && t <= String(root.tabs.length)) {
       root.setTab(root.tabs[Number(t) - 1])
     } else if (t === "/") {
       root.setTab("scan")
@@ -399,6 +478,7 @@ Panel {
     } else {
       root.confirmPurpose = ""
       root._confirmSha = ""
+      root.clearAgentConfirm()
     }
     root.syncServiceVisibility()
   }
@@ -413,6 +493,9 @@ Panel {
   }
   onPluginRowsChanged: {
     if (root.pluginsIndex >= root.pluginRows.length) root.pluginsIndex = Math.max(0, root.pluginRows.length - 1)
+  }
+  onAgentItemsChanged: {
+    if (root.agentsIndex >= root.agentItems.length) root.agentsIndex = Math.max(0, root.agentItems.length - 1)
   }
   onSettingsItemsChanged: {
     if (root.settingsIndex >= root.settingsItems.length) root.settingsIndex = Math.max(0, root.settingsItems.length - 1)
@@ -525,6 +608,7 @@ Panel {
                 { value: "scan", label: "", icon: Model.Glyph.magnify, tooltip: "Scan" },
                 { value: "history", label: "", icon: Model.Glyph.history, tooltip: "History" },
                 { value: "plugins", label: "", icon: Model.Glyph.puzzle, tooltip: "Plugins" },
+                { value: "agents", label: "", icon: Model.Glyph.robot, tooltip: "Agents" },
                 { value: "settings", label: "", icon: Model.Glyph.cog, tooltip: "Settings" }
               ]
               foreground: root.foreground
@@ -764,6 +848,19 @@ Panel {
                     fontFamily: root.fontFamily
                     onClicked: root.service.acknowledgeAlert()
                   }
+
+                  Button {
+                    visible: root.showAlertAsk
+                    text: "Ask " + (root.agents ? root.agents.defaultName : "")
+                    iconText: Model.Glyph.robot
+                    tooltipText: "Open Omarchy's default agent with this alert"
+                    bordered: true
+                    enabled: !!root.agents && !root.agents.handoffBusy
+                    opacity: enabled ? 1 : 0.55
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.askAgent(root.alert)
+                  }
                 }
               }
             }
@@ -859,6 +956,18 @@ Panel {
               width: parent.width
               text: root.service ? root.service.errorMessage : ""
               color: root.urgent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+
+            // "Ask <agent>" feedback: opened, or why it could not.
+            Text {
+              textFormat: Text.PlainText
+              visible: !!root.agents && root.agents.handoffNote !== ""
+              width: parent.width
+              text: root.agents ? root.agents.handoffNote : ""
+              color: root.roleColor(root.agents ? root.agents.handoffRole : "muted")
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
               wrapMode: Text.Wrap
@@ -1031,6 +1140,7 @@ Panel {
                   width: parent.width
                   spacing: Style.space(6)
                   visible: root.showOpenAction || root.showUploadAction || root.showStatusAction || root.showAgainAction
+                    || root.showAskAction
 
                   Button {
                     id: openButton
@@ -1080,6 +1190,20 @@ Panel {
                     foreground: root.foreground
                     fontFamily: root.fontFamily
                     onClicked: root.service.checkAgain()
+                  }
+
+                  Button {
+                    id: askButton
+                    visible: root.showAskAction
+                    text: "Ask " + (root.agents ? root.agents.defaultName : "")
+                    iconText: Model.Glyph.robot
+                    tooltipText: "Open Omarchy's default agent with this result"
+                    bordered: true
+                    enabled: !!root.agents && !root.agents.handoffBusy
+                    opacity: enabled ? 1 : 0.55
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                    onClicked: root.askAgent(root.result)
                   }
                 }
               }
@@ -1311,6 +1435,24 @@ Panel {
               root.pluginsIndex = index
             }
             onOpenSettings: root.setTab("settings")
+          }
+
+          // ================================================================
+          // Agents tab
+          // ================================================================
+          AgentsTab {
+            id: agentsTab
+            visible: root.tab === "agents" && root.ready
+            width: parent.width
+            panel: root
+            service: root.service
+            cursorActive: root.cursorActive && root.tab === "agents"
+            cursorIndex: root.agentsIndex
+            onCursorRequested: index => {
+              root.cursorActive = true
+              root.agentsIndex = index
+            }
+            onConfirmRequested: (purpose, id) => root.askAgentConfirm(purpose, id)
           }
 
           // ================================================================
