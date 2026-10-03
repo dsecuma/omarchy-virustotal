@@ -6,8 +6,9 @@ import "Scripts.js" as Scripts
 
 // Background service for the VirusTotal plugin: the VirusTotal AI (VTAI)
 // credential, lookups, consented uploads, analysis polling, history, the
-// optional Downloads watcher and the optional installed-plugin scanner
-// (PluginScanner.qml).
+// optional Downloads watcher, the optional installed-plugin scanner
+// (PluginScanner.qml) and Omarchy's coding agents (AgentsManager.qml: the
+// VirusTotal AI MCP server, the virustotal skill and "Ask <agent>").
 //
 // The shell mounts one instance per session (manifest kind "service"), so the
 // bars on every monitor share this state and the watcher runs once.
@@ -121,6 +122,12 @@ Item {
   readonly property bool pluginScannerActive: pluginScanEnabled && !standalone && ready && missingTools === ""
     && scanMissingTools === "" && pluginBackendReady
   property alias scanner: pluginScanner
+
+  // --- coding agents (persisted settings) ------------------------------------
+  // "Ask <agent>" buttons on results; the auto-approve warning shows once.
+  property bool agentButtons: true
+  property bool agentHandoffAck: false
+  property alias agents: agentsManager
 
   readonly property string barStatus: {
     if (lastAlert && !alertAcknowledged) return lastAlert.stats && lastAlert.stats.malicious > 0 ? "malicious" : "suspicious"
@@ -345,13 +352,16 @@ Item {
     root.maxParallel = c.maxParallel
     root.classicPerMin = c.classicPerMin
     root.classicPerDay = c.classicPerDay
+    root.agentButtons = c.agentButtons
+    root.agentHandoffAck = c.agentHandoffAck
   }
 
   function saveConfig() {
     var t = Model.serializeConfig({ watcherEnabled: root.watcherEnabled, notifyAll: root.notifyAll,
                                     pluginScanEnabled: root.pluginScanEnabled, pluginAutoUpload: root.pluginAutoUpload,
                                     pluginBackend: root.pluginBackend, maxParallel: root.maxParallel,
-                                    classicPerMin: root.classicPerMin, classicPerDay: root.classicPerDay })
+                                    classicPerMin: root.classicPerMin, classicPerDay: root.classicPerDay,
+                                    agentButtons: root.agentButtons, agentHandoffAck: root.agentHandoffAck })
     root._lastConfigText = t
     if (!root.dirsReady) {
       root._configDirty = true
@@ -976,6 +986,30 @@ Item {
     statePath: root.dirsReady ? root.stateDir + "/plugins.json" : ""
   }
 
+  // --- coding agents ---------------------------------------------------------
+
+  function setAgentButtons(value) {
+    var v = value === true
+    if (root.agentButtons === v) return
+    root.agentButtons = v
+    root.saveConfig()
+  }
+
+  // The panel sets this after the auto-approve warning before the first
+  // "Ask <agent>".
+  function setAgentHandoffAck(value) {
+    var v = value === true
+    if (root.agentHandoffAck === v) return
+    root.agentHandoffAck = v
+    root.saveConfig()
+  }
+
+  AgentsManager {
+    id: agentsManager
+    service: root
+    statePath: root.dirsReady ? root.stateDir + "/agents.json" : ""
+  }
+
   // Each open panel (one per monitor at most) calls panelOpened() once and
   // panelClosed() once.
   function panelOpened() {
@@ -989,6 +1023,8 @@ Item {
     if (root.downloadsDirExists) root.refreshRecentDownloads()
     else root.checkDownloadsDir()
     if (pluginScanner.active) pluginScanner.probe()
+    // For the "Ask <agent>" buttons.
+    agentsManager.refreshDefault(false)
   }
 
   function panelClosed() {

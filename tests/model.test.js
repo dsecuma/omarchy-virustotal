@@ -249,7 +249,7 @@ test("maps registration errors", () => {
 
 test("builds the registration body", () => {
   same(JSON.parse(M.registerBody("1.0.0")), { agent_family: "omarchy", agent_version: "1.0.0", display_name: "Omarchy VirusTotal" })
-  assert.strictEqual(JSON.parse(M.registerBody("1.0 beta; rm")).agent_version, "1.0.0")
+  assert.strictEqual(JSON.parse(M.registerBody("1.0 beta; rm")).agent_version, M.DEFAULT_VERSION)
   assert.ok(/^[a-zA-Z0-9 _-]+$/.test(M.AGENT_DISPLAY_NAME))
 })
 
@@ -381,7 +381,8 @@ test("state and config round-trip", () => {
   same(JSON.parse(JSON.stringify(M.parseState("garbage"))), { entries: [], alert: null, alertAcknowledged: true })
   assert.strictEqual(M.parseState("[{\"kind\":\"url\",\"target\":\"x\"}, 5]").entries.length, 1)
   const defaults = { watcherEnabled: false, notifyAll: false, pluginScanEnabled: false, pluginAutoUpload: false,
-                     pluginBackend: "vtai", maxParallel: 4, classicPerMin: 4, classicPerDay: 500 }
+                     pluginBackend: "vtai", maxParallel: 4, classicPerMin: 4, classicPerDay: 500,
+                     agentButtons: true, agentHandoffAck: false }
   same(M.parseConfig(M.serializeConfig({ watcherEnabled: true })), Object.assign({}, defaults, { watcherEnabled: true }))
   same(M.parseConfig("[]"), defaults)
   same(M.parseConfig(""), defaults)
@@ -390,6 +391,11 @@ test("state and config round-trip", () => {
        Object.assign({}, defaults, { pluginScanEnabled: true, pluginAutoUpload: true, pluginBackend: "classic",
                                      maxParallel: 8, classicPerMin: 1, classicPerDay: 1000 }))
   assert.strictEqual(M.parseConfig("{\"pluginBackend\":\"evil\"}").pluginBackend, "vtai")
+  same(M.parseConfig(M.serializeConfig({ agentButtons: false, agentHandoffAck: true })),
+       Object.assign({}, defaults, { agentButtons: false, agentHandoffAck: true }))
+  // Only an explicit false hides the buttons; only an explicit true skips the warning.
+  assert.strictEqual(M.parseConfig("{\"agentButtons\":0,\"agentHandoffAck\":\"yes\"}").agentButtons, true)
+  assert.strictEqual(M.parseConfig("{\"agentButtons\":0,\"agentHandoffAck\":\"yes\"}").agentHandoffAck, false)
 })
 
 test("ignores temporary download files", () => {

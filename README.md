@@ -2,6 +2,8 @@
 
 A community plugin for the [Omarchy](https://omarchy.org) shell (Quattro) that checks URLs, domains, IP addresses, file hashes and local files against VirusTotal from the bar. It can also watch your Downloads folder **and your installed Omarchy plugins**, and alert you when VirusTotal flags a new file.
 
+It also connects [Omarchy's coding agents](https://omarchy.org/manual/ai/) (Claude Code, Codex, OpenCode and the rest) to VirusTotal AI, and can hand a result to your default agent for a closer look.
+
 It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) with `curl`. There is nothing to build and no binary to install.
 
 ![VirusTotal panel in the Omarchy bar](preview.png)
@@ -18,7 +20,9 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 - The plugin never issues its own verdict: headlines are the raw counts (e.g. `2/91 flagged`) and AI insights are shown as returned.
 - **Downloads watcher** (off by default): looks up each new download and notifies you when VirusTotal engines or AI insights flag it. It never uploads anything by itself.
 - **Plugin scanner** (off by default): notices when an Omarchy plugin is installed or updated and looks up every file of it on VirusTotal, several requests at a time within the API quota. Unknown files are uploaded only if you turned that on.
-- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>4</kbd> switch tabs.
+- **Agents tab**: one button adds the VirusTotal AI MCP server to every installed Omarchy coding agent and links a `virustotal` skill that tells them how to look things up and report. Each agent signs in with your Google account; no token is written to agent settings. See [Coding agents](#coding-agents).
+- **Ask &lt;agent&gt;**: hands a finished lookup or a download alert to your default Omarchy agent.
+- Keyboard friendly: type straight away; <kbd>Enter</kbd> scans, <kbd>Esc</kbd> closes, <kbd>Tab</kbd> moves to the next bar panel, <kbd>↑</kbd>/<kbd>↓</kbd> leave the text field, then <kbd>h</kbd>/<kbd>l</kbd> or <kbd>1</kbd>–<kbd>5</kbd> switch tabs.
 - Follows your Omarchy theme; no hard-coded colours.
 
 ## Requirements
@@ -27,6 +31,7 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 - `curl`, `sha256sum`, `stat` and `date` (curl plus coreutils, present on a standard Omarchy install).
 - For the Downloads watcher and the recent downloads list: the `Qt.labs.folderlistmodel` QML module, part of `qt6-declarative`, which Quickshell already depends on. Without it the rest of the plugin keeps working.
 - Notifications use `omarchy-notification-send` (bundled with Omarchy), or `notify-send` as a fallback.
+- For the Agents tab: `jq` to read and edit the agents' JSON settings and `wl-copy` for the Copy buttons (both ship with Omarchy). Without `jq`, agents with JSON settings show as unreadable and are left untouched.
 
 ## Install
 
@@ -94,6 +99,53 @@ Enable it in **Settings → Plugins → Check installed plugins**. It watches `~
 - If VirusTotal answers with a rate limit error, the scanner pauses and retries. A rejected key or token stops the scan until you fix it.
 - **The API key** is only used by the plugin scanner; the Scan tab and the Downloads watcher always use VTAI. It is saved to `~/.config/omarchy-virustotal/vt-apikey.header` with mode 600. The key reaches the shell through stdin and `curl` reads it with `-H @file`, so it never appears on a command line. **Delete** removes the file.
 
+## Coding agents
+
+Omarchy ships [a set of coding agents](https://omarchy.org/manual/ai/) and lets you pick a default one. The **Agents** tab (<kbd>5</kbd>) gives them VirusTotal AI, so they can look up files, URLs, domains and IP addresses themselves and explain the report.
+
+- **Connect installed agents** lists what it will change and asks first. After you confirm, it links the `virustotal` skill and adds the VirusTotal AI MCP server (`https://ai.virustotal.com/mcp`) to every installed agent that has no VirusTotal entry yet. Each row also has its own **Add**.
+- **Sign in once per agent.** The MCP entry holds only the URL: no token or header is written. Each agent signs in to VirusTotal with your Google account (OAuth) the first time; **Sign in** on its row opens the agent and shows the steps.
+- Agents that are not installed are listed but never run: Omarchy's launcher for a missing agent installs it when run, and the plugin never installs agents.
+- The plugin never changes or removes an entry it did not create, and never adds a second VirusTotal entry to an agent that already has one, whatever its name.
+
+| Agent | How it gets the MCP server | Sign in |
+|---|---|---|
+| Claude Code | `claude mcp add --scope user --transport http virustotal <url>`, in every Omarchy Claude account | `/mcp` → virustotal → Authenticate, in each account |
+| Codex | `codex mcp add virustotal --url <url>` (Omarchy's Codex accounts share it) | `codex mcp login virustotal` |
+| Antigravity | `agy mcp add --type http virustotal <url>` | `/mcp` → virustotal → Authenticate; paste the code into that dialog |
+| GitHub Copilot | `copilot mcp add --transport http virustotal <url>` | `/mcp auth virustotal` |
+| Grok | `grok mcp add --transport http virustotal <url>` (from xAI's docs; not verified by VirusTotal) | On first use; `/mcps` shows the connection |
+| OpenCode | Adds `mcp.virustotal` to `~/.config/opencode/opencode.json` | `opencode mcp auth virustotal` |
+| Cursor CLI | Adds `mcpServers.virustotal` to `~/.cursor/mcp.json` | `cursor-agent mcp login virustotal` |
+| Crush, Hermes, OpenClaw, Oh My Pi, Ori, Muse Code | Manual: the row shows the steps, **Copy** puts the snippet or the details on the clipboard and **Setup guide** opens VirusTotal's instructions | As the agent's docs say |
+| Pi | Skill only: Pi has no MCP support by design, so the skill uses the plugin's VirusTotal AI connection | – |
+
+- **JSON settings** (OpenCode, Cursor CLI): the previous file is kept next to it as `<file>.bak-omarchy-virustotal-<time>`, and the new one replaces it atomically with the same permissions. `jq` rewrites the file's layout. Symlinks (dotfile managers), files with comments (JSONC) and an existing `opencode.jsonc` are left alone; the row then tells you how to add the entry by hand.
+- **Remove** shows only for entries the plugin added that still hold exactly its URL. It does not revoke the access you granted with Google: **VirusTotal access** opens [ai.virustotal.com/oauth/connections](https://ai.virustotal.com/oauth/connections), where you can see and revoke it.
+- What the plugin added is recorded in `~/.local/state/omarchy-virustotal/agents.json`. Without that record, entries count as yours and are left alone.
+- **Quota**: MCP lookups use the VirusTotal AI quota of the Google account the agent signed in with: 60 per minute and 1,000 per day, shared by every agent on that account. The skill's REST fallback uses the plugin's agent token, like the panel.
+
+### The `virustotal` skill
+
+[`agents/skills/virustotal/SKILL.md`](agents/skills/virustotal/SKILL.md) tells an agent how to query VirusTotal, how to read a report and what to tell you:
+
+- It uses the MCP tools when the agent has them, otherwise REST lookups with the plugin's token file (`curl -H @file`, never printed), otherwise it asks you to connect.
+- Lookups only: a file is identified by its hash and never opened, run or unpacked, and defanged URLs are not visited.
+- It repeats VirusTotal's numbers and never calls something "clean" or "safe".
+- Uploads are public, so the agent submits something only when you ask for it in the conversation, after a reminder.
+
+**Link** creates a `virustotal` symlink to that folder in the skill folders Omarchy links its own skills into: `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.pi/agent/skills`, `~/.gemini/config/skills`, `~/.hermes/skills` and `~/.hermes/profiles/*/skills`. An existing file or folder with that name is left alone. **Unlink** removes only the links that point to this plugin.
+
+### Ask &lt;agent&gt;
+
+Once a default agent is chosen in Omarchy (**Change** opens Omarchy's picker), finished lookups and download alerts get an **Ask** button. It runs `omarchy agent prompt` with:
+
+- the facts the plugin recorded, such as the type, SHA-256, name, location, VirusTotal's numbers, detection labels, AI insight and report link. URLs, domains and IPs are defanged (`hxxps://example[.]com`), and hidden or control characters in names show as `<U+202E>`-style escapes;
+- the instruction to follow the `virustotal` skill (or read its `SKILL.md`), to only look things up and to ask before any upload.
+
+> [!WARNING]
+> Omarchy starts agents in auto-approve mode, so they run commands without asking you first. The first **Ask** shows a warning. **Show an "Ask" button on results**, in the Agents tab, turns the buttons off.
+
 ## Files
 
 | Path | Contents |
@@ -103,25 +155,39 @@ Enable it in **Settings → Plugins → Check installed plugins**. It watches `~
 | `~/.config/omarchy-virustotal/vt-apikey.header` | Optional classic VirusTotal API key (mode 600) |
 | `~/.local/state/omarchy-virustotal/history.json` | Check history and the last watcher alert |
 | `~/.local/state/omarchy-virustotal/plugins.json` | Plugin scanner state: known plugins, per-file results and quota counters |
+| `~/.local/state/omarchy-virustotal/agents.json` | What the Agents tab added: MCP entries, backups and skill links |
+| `~/.agents/skills/virustotal` and the other skill folders above | Symlinks to the plugin's `virustotal` skill (after **Link**) |
+| `~/.claude.json` (and `.claude.json` in other Omarchy Claude accounts), `~/.codex/config.toml`, `~/.gemini/config/mcp_config.json`, `~/.copilot/mcp-config.json`, `~/.grok/config.toml`, `~/.config/opencode/opencode.json`, `~/.cursor/mcp.json` | A `virustotal` MCP entry, only after **Connect installed agents** or **Add** |
+| `<settings file>.bak-omarchy-virustotal-<time>` | Copy of a JSON settings file from before the plugin edited it |
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` are honoured.
 
 ## Remove
 
 1. Optional: open **Settings → Disconnect** to revoke the token first.
-2. Remove the plugin:
+2. Optional, while the plugin is still installed: in the **Agents** tab, **Remove** VirusTotal from the agents the plugin connected and **Unlink** the skill. Otherwise see step 6.
+3. Remove the plugin:
 
    ```bash
    omarchy plugin remove io.github.dsecuma.virustotal
    ```
 
-3. Delete its data:
+4. Delete its data:
 
    ```bash
    rm -rf ~/.config/omarchy-virustotal ~/.local/state/omarchy-virustotal
    ```
 
-4. Delete `~/.config/vtai/auth.header` only if no other VTAI tool uses it.
+5. Delete `~/.config/vtai/auth.header` only if no other VTAI tool uses it.
+6. If you skipped step 2, the skill links point to a folder that no longer exists. This deletes only the links that point to this plugin:
+
+   ```bash
+   find -H ~/.agents/skills ~/.claude/skills ~/.codex/skills ~/.pi/agent/skills ~/.gemini/config/skills ~/.hermes \
+     -maxdepth 4 -type l -name virustotal -lname '*/io.github.dsecuma.virustotal/agents/skills/virustotal*' -print -delete 2>/dev/null
+   ```
+
+   Remove the MCP entries with each agent's own command (for example `claude mcp remove --scope user virustotal` or `codex mcp remove virustotal`), or delete the `virustotal` entry from `~/.config/opencode/opencode.json` and `~/.cursor/mcp.json`.
+7. Delete the `*.bak-omarchy-virustotal-*` backups next to the agents' settings once you no longer need them, and revoke the agents' access at [ai.virustotal.com/oauth/connections](https://ai.virustotal.com/oauth/connections).
 
 ## Troubleshooting
 
@@ -129,14 +195,18 @@ Enable it in **Settings → Plugins → Check installed plugins**. It watches `~
 - **"Token rejected"**: the token was revoked or expired. Use **Reconnect** in the panel.
 - **The watcher option is disabled**: the `Qt.labs.folderlistmodel` module is missing (install `qt6-declarative`), or the bar doesn't run plugin services.
 - **The plugin scanner is paused**: open the Plugins tab to see why (not connected, key missing or rejected, quota used up until 00:00 UTC).
+- **An agent shows "Couldn't read …"**: the plugin could not parse that agent's settings, or `jq` is missing, so it changed nothing. Use **Copy** or **Setup guide** on its row to add the entry by hand.
+- **An agent can't use VirusTotal**: it has to sign in once. Use **Sign in** on its row, or VirusTotal's **Setup guide** for that agent.
+- **There is no Ask button**: choose a default agent with **Change** in the Agents tab, check that it is installed and that **Show an "Ask" button on results** is on. The button only shows on finished lookups and download alerts.
 - **Logs**: warnings are printed with a `[virustotal]` prefix in the Omarchy shell log.
 
 ## Development
 
 ```bash
 node tests/model.test.js     # pure logic in Model.js
-node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with a fake curl)
+node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with fake curl and agent commands)
 node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
+node tests/agents.test.js    # agents logic in Agents.js (agent table, probe parsers, record, hand-off prompt)
 qmllint -I "$OMARCHY_PATH/shell" *.qml
 "$OMARCHY_PATH/bin/omarchy-plugin-validate" .
 ```
@@ -145,15 +215,19 @@ qmllint -I "$OMARCHY_PATH/shell" *.qml
 |---|---|
 | `manifest.json` | Plugin manifest (`bar-widget` + `service`) |
 | `BarWidget.qml` | Bar icon; loads the panel and finds the shared service |
-| `Panel.qml` | Scan, History, Plugins and Settings UI |
+| `Panel.qml` | Scan, History, Plugins, Agents and Settings UI |
 | `PluginsTab.qml` | Plugins tab: installed plugins and their files |
-| `Service.qml` | Credential, API calls, uploads, polling, history, watcher |
+| `AgentsTab.qml` | Agents tab: the coding agents, the skill and the Ask setting |
+| `Service.qml` | Credential, API calls, uploads, polling, history, watcher; hosts the agents manager |
 | `PluginScanner.qml` | Plugin scanner: change detection, parallel lookups/uploads, state |
+| `AgentsManager.qml` | Coding agents: probes, MCP entries, skill links, sign-in, hand-off, `agents.json` |
 | `DownloadsFolder.qml` | Downloads listing (loaded on demand) |
 | `PluginsFolder.qml` | Watches the plugins folder (loaded on demand) |
 | `VirusTotalIcon.qml` | The VirusTotal mark drawn with theme colours |
 | `Model.js` | Pure helpers (input detection, result mapping, history) |
 | `Scanner.js` | Pure plugin scanner logic (rate limiter, scheduler, diffing, summaries) |
+| `Agents.js` | Pure agents logic (agent table, probe parsers, rows, record, hand-off prompt) |
 | `Scripts.js` | POSIX `sh` snippets; untrusted values only travel as arguments |
+| `agents/skills/virustotal/SKILL.md` | The `virustotal` skill the Agents tab links into the agents' skill folders |
 
 CI (`.github/workflows/ci.yml`) runs the tests, checks the manifest, rejects hex colours, symlinks and executable files, and runs Omarchy's plugin validator.
