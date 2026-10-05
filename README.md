@@ -316,6 +316,7 @@ When the panel opens, the Scan tab's text field has focus: type, then press <kbd
 node tests/model.test.js     # pure logic in Model.js
 node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with fake curl and agent commands)
 node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
+node tests/transport.test.js # backoff, upload recovery and local curl fixture
 node tests/lifecycle.test.js # QML controller methods with deferred callbacks (no desktop required)
 node tests/agents.test.js    # agents logic in Agents.js (agent table, probe parsers, record, hand-off prompt)
 qmllint -I "$OMARCHY_PATH/shell" *.qml
@@ -360,3 +361,9 @@ After changing files there, restart the shell with `omarchy-restart-shell` and f
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Upload scheduling and recovery
+
+Automatic plugin uploads run one at a time, spaced by their quota. Parallel report lookups still use the configured worker limit. Both engines respect HTTP `Retry-After`; curl 7.84 or newer is required. Recent quota windows survive a scanner restart.
+
+A connection loss or ambiguous server/proxy failure is not proof that an upload failed. The scanner recovers the original VTAI receipt by SHA-256 using GET, or checks the file report with a classic API key. It does not immediately replay the file POST. An explicit VTAI capacity rejection before admission can be retried with backoff.

@@ -2,6 +2,13 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.5 – 2026-10-06
+
+- Honor HTTP Retry-After (seconds or HTTP-date) for both API engines, and keep server polling hints at every stage.
+- Serialize and pace automatic uploads independently of parallel lookups. Preserve the recent quota window when rebuilding the limiter.
+- Recover uncertain VTAI uploads with GET on the same SHA-256 receipt. Classic uploads fall back to a hash lookup. Ambiguous server/proxy failures no longer trigger another POST; explicit VTAI pre-admission capacity rejection remains retryable.
+- Add offline transport/controller regressions and a real curl loopback fixture. Requires curl 7.84 or newer for response-header write-out (available on current Omarchy).
+
 ## 1.1.4 – 2026-10-06
 
 - Cancel queued and preparing automatic uploads when permission is withdrawn. Invalidate stale hash callbacks across scanner shutdown, authentication failure, backend changes and permission off/on cycles.

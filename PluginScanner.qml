@@ -42,6 +42,7 @@ Item {
   property bool loaded: false
   property bool pluginsDirExists: true
   property int inFlight: 0
+  property int uploadsInFlight: 0
   property int queued: 0
   property int hashing: 0
   property int hashQueueLength: 0
@@ -412,7 +413,7 @@ Item {
     if (!root.autoUpload) root.dropQueuedUploads()
     var now = Date.now()
     if (root.pauseUntil <= now) root.pauseReason = ""
-    var s = { queue: root._queue, inFlight: root.inFlight, maxParallel: root.maxParallel,
+    var s = { queue: root._queue, inFlight: root.inFlight, uploadsInFlight: root.uploadsInFlight, maxParallel: root.maxParallel,
               pauseUntil: root.pauseUntil, limiter: root._limiter }
     var d = Scanner.dispatch(s, now)
     root._queue = s.queue
@@ -488,10 +489,15 @@ Item {
       return
     }
     root.inFlight++
+    if (t.type === "upload") root.uploadsInFlight++
     var gen = root._gen
     function done(handler) {
       return function(res) {
-        if (gen !== root._gen) return
+        if (t.type === "upload") root.uploadsInFlight = Math.max(0, root.uploadsInFlight - 1)
+        if (gen !== root._gen) {
+          root.pump()
+          return
+        }
         root.inFlight = Math.max(0, root.inFlight - 1)
         try {
           handler(res)
@@ -504,6 +510,7 @@ Item {
     }
     if (t.type === "lookup") root.request("GET", "/files/" + t.sha, {}, done(function(res) { root.onLookup(t, res) }))
     else if (t.type === "poll") root.request("GET", "/analyses/" + encodeURIComponent(t.analysisId), {}, done(function(res) { root.onPoll(t, res) }))
+    else if (t.type === "receipt") root.request("GET", "/submissions/" + t.sha, {}, done(function(res) { root.onReceipt(t, res) }))
     else root.upload(t, done(function(res) { root.onUpload(t, res) }))
   }
 
@@ -528,7 +535,7 @@ Item {
         root.service.sh(Scripts.classicUpload, [t.path, root.service.apiKeyPath, Scanner.BACKENDS.classic.base + "/files",
                                                 root.service.userAgent, "130"], 160000, function(c, out) {
           var parsed = Model.parseCurlOutput(out)
-          callback({ exitCode: c, http: parsed.http, body: parsed.body, json: Model.parseJson(parsed.body) })
+          callback({ exitCode: c, http: parsed.http, body: parsed.body, retryAfter: parsed.retryAfter, json: Model.parseJson(parsed.body) })
         })
         return
       }
@@ -539,8 +546,8 @@ Item {
 
   function errorFor(res) {
     return root.backend === "classic"
-      ? Scanner.classicError(res.http, res.json, res.exitCode)
-      : Model.apiError(res.http, res.json, res.exitCode)
+      ? Scanner.classicError(res.http, res.json, res.exitCode, res.retryAfter)
+      : Model.apiError(res.http, res.json, res.exitCode, res.retryAfter)
   }
 
   function extraFor(t) {
@@ -564,9 +571,13 @@ Item {
       return
     }
     if (e.kind === "network" || e.kind === "timeout" || e.kind === "unavailable") {
+      if (e.retryAfter > 0) {
+        root.pauseUntil = Math.max(root.pauseUntil, now + e.retryAfter * 1000)
+        root.pauseReason = e.message
+      }
       t.attempts = (t.attempts || 0) + 1
       if (t.attempts < Scanner.MAX_ATTEMPTS) {
-        root.requeue(t, 30000 * t.attempts)
+        root.requeue(t, Math.max(30000 * t.attempts, (e.retryAfter || 0) * 1000))
         return
       }
     }
@@ -654,19 +665,38 @@ Item {
           root.queuePoll(t, String(receipt.analysis_id), 0, receipt.next_poll_after_seconds)
           return
         }
-        // Not confirmed yet: look the file up later instead of uploading again.
-        root.markUploaded(t.sha, now, "")
-        root.followUp(t, "lookup", 120000)
+        root.recoverUpload(t, res, now)
         return
       }
     }
-    if (!res.http && res.exitCode !== 127) {
-      // The bytes may or may not have arrived: never resend automatically.
-      root.markUploaded(t.sha, now, "")
-      root.followUp(t, "lookup", 120000)
+    var capacityRejected = root.backend === "vtai" && res.http === 503 && root.errorFor(res).code === "capacity_exceeded"
+    if ((!res.http && res.exitCode !== 127) || (res.http >= 500 && !capacityRejected)
+        || res.http === 200 || res.http === 202) {
+      // A proxy/server failure may follow an accepted upload. Only VTAI's
+      // explicit pre-admission capacity rejection is safe to retry as a POST.
+      root.recoverUpload(t, res, now)
       return
     }
     root.handleError(t, res)
+  }
+
+  function recoverUpload(t, res, now) {
+    root.markUploaded(t.sha, now, "")
+    var delay = Math.max(120000, Math.max(Model.num(res.retryAfter), root.errorFor(res).retryAfter || 0) * 1000)
+    root.followUp(t, root.backend === "vtai" ? "receipt" : "lookup", delay)
+  }
+
+  function onReceipt(t, res) {
+    var receipt = res.json
+    if (res.http === 200 && receipt && ((receipt.status === "submitted" && receipt.analysis_id) || receipt.status === "exists")) {
+      root.onUpload(t, res)
+    } else if (res.http === 404 || res.http === 200) {
+      // No recoverable analysis ID yet. A report lookup is safe; never turn
+      // receipt recovery into an automatic re-submission.
+      root.followUp(t, "lookup", 120000)
+    } else {
+      root.handleError(t, res)
+    }
   }
 
   function onPoll(t, res) {
