@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.dsecuma.virustotal",
   "name": "VirusTotal",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "author": "David Santos",
   "description": "Community plugin that checks URLs, domains, IPs, hashes and files against VirusTotal from the Omarchy bar, with optional watchers for new downloads and for new or updated Omarchy plugins, and connects Omarchy's coding agents to VirusTotal AI. Uses the VirusTotal AI API or your own API key; files are only uploaded after you confirm.",
   "kinds": [

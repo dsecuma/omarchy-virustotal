@@ -29,7 +29,7 @@ It talks to the public [VirusTotal AI API](https://ai.virustotal.com) (VTAI) wit
 ## Requirements
 
 - Omarchy with the Quattro shell.
-- `curl`, `sha256sum`, `stat` and `date` (curl plus coreutils, present on a standard Omarchy install). The plugin scanner also needs `find`, `awk` and `head`, and reads a plugin's commit with `git` when it is installed.
+- `curl`, `sha256sum`, `stat` and `date` (curl plus coreutils, present on a standard Omarchy install). The plugin scanner also needs `find`, `sort` and `head`, and reads a plugin's commit with `git` when it is installed.
 - For the Downloads watcher and the recent downloads list: the `Qt.labs.folderlistmodel` QML module, part of `qt6-declarative`, which Quickshell already depends on. Without it the rest of the plugin keeps working.
 - Notifications use `omarchy-notification-send` (bundled with Omarchy), or `notify-send` as a fallback.
 - For the Agents tab: `jq` to read and edit the agents' JSON settings and `wl-copy` for the Copy buttons (both ship with Omarchy). Without `jq`, agents with JSON settings show as unreadable and are left untouched.
@@ -316,6 +316,7 @@ When the panel opens, the Scan tab's text field has focus: type, then press <kbd
 node tests/model.test.js     # pure logic in Model.js
 node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with fake curl and agent commands)
 node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
+node tests/filesystem.test.js # change detection and unusual filenames
 node tests/transport.test.js # backoff, upload recovery and local curl fixture
 node tests/lifecycle.test.js # QML controller methods with deferred callbacks (no desktop required)
 node tests/agents.test.js    # agents logic in Agents.js (agent table, probe parsers, record, hand-off prompt)

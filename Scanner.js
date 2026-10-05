@@ -235,7 +235,7 @@ function cleanText(value, max) {
   return Model.truncate(String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim(), max || 120)
 }
 
-// Scripts.probePlugins: "dir\thead\tcount size mtime\tversion\tname\tlink".
+// Scripts.probePlugins: "dir\thead\tmetadata digest\tversion\tname\tlink".
 function parseProbe(text) {
   var out = []
   var lines = String(text || "").split("\n")
@@ -258,7 +258,7 @@ function parseProbe(text) {
 // Scripts.hashPlugin: "#\t<total>\t<skipped>" then "sha256\tsize\trelpath".
 function parseHashList(text, maxFiles) {
   var max = maxFiles || MAX_FILES_PER_PLUGIN
-  var files = {}
+  var files = Object.create(null)
   var count = 0
   var total = 0
   var skipped = 0
@@ -547,7 +547,7 @@ function summaryNotification(record, summary, notifyAll) {
 // --- persisted state ---------------------------------------------------------
 
 function sanitizeFiles(files) {
-  var out = {}
+  var out = Object.create(null)
   var ks = keys(files)
   for (var i = 0; i < ks.length && i < MAX_FILES_PER_PLUGIN; i++) {
     var f = files[ks[i]]
@@ -558,7 +558,7 @@ function sanitizeFiles(files) {
 
 function parseState(text) {
   var j = Model.parseJson(text)
-  var s = { version: 1, baselineDone: false, plugins: {}, cache: {}, quota: null }
+  var s = { version: 1, baselineDone: false, plugins: Object.create(null), cache: {}, quota: null }
   if (!j || typeof j !== "object" || Array.isArray(j)) return s
   s.baselineDone = j.baselineDone === true
   var ps = keys(j.plugins)
