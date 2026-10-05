@@ -2,6 +2,12 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.8 – 2026-10-06
+
+- Prepare a private, bounded copy before uploading a local file. Verify the copy against the SHA-256 that was looked up and send that exact copy through either API, so replacing the original path cannot change the submitted bytes.
+- Recheck scanner permission after preparation and clean copies after cancellation, request completion/failure and normal service teardown. Refuse file symlinks at preparation time.
+- Add shell and controller regressions for changed files, size bounds, permissions, cancellation and exact-byte transmission. No live submissions are needed for these tests.
+
 ## 1.1.7 – 2026-10-06
 
 - Report incomplete scans when results are absent, all engines failed/timed out, requests failed, or plugin coverage is partial. Notifications no longer claim no detections for zero checked files.

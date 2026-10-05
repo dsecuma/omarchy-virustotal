@@ -61,7 +61,7 @@ function test(name, fn) {
 
 test("scripts parse", shell => {
   for (const name of ["startup", "credentialCheck", "dirCheck", "removeFile", "openUrl", "register", "hash", "notify",
-                      "probePlugins", "hashPlugin", "saveApiKey", "classicUpload",
+                      "probePlugins", "hashPlugin", "saveApiKey", "classicUpload", "prepareUpload", "removeUpload",
                       "agentPrelude", "probeAgents", "probeMcp", "skillLinks", "agentCli", "jsonMcp", "launchAgent",
                       "agentPrompt", "agentMenu", "copyText"]) {
     assert.strictEqual(typeof S[name], "string", name)

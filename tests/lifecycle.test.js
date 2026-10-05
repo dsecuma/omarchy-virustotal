@@ -6,16 +6,16 @@ function task(type = 'upload', hash = sha) {
   return { type, sha: hash, size: 1, path: '/fake/plugin.txt', name: 'plugin.txt', plugin: 'test' }
 }
 function setup() {
-  const sent = [], hashes = []
+  const sent = [], hashes = [], removed = []
   const root = { active: true, loaded: true, autoUpload: true, backend: 'vtai', _gen: 1, _uploadGen: 0,
     _queue: [], _busy: {}, _scans: {}, _st: Scanner.parseState(''), inFlight: 0, uploadsInFlight: 0, scanTotal: 0, scanDone: 0 }
-  root.service = { hashFile: (p, q, m, cb) => hashes.push(cb), api: (...a) => sent.push(a), sh: (...a) => sent.push(a),
+  root.service = { prepareUploadFile: (p, sha, cb) => hashes.push(cb), removeUploadFile: p => { if (p) removed.push(p) }, api: (...a) => sent.push(a), sh: (...a) => sent.push(a),
     apiKeyPath: '/fake/key', userAgent: 'test' }
   const timer = { stop() {}, restart() {} }
   methods('PluginScanner.qml', root, { pumpTimer: timer, saveTimer: timer, folderDebounce: timer,
     stateFile: { path: '/fake/state', setText() {} } })
   for (const n of ['updateCounters', 'scheduleUi', 'afterTask', 'refreshUi', 'probe', 'topUp']) root[n] = () => {}
-  return { root, sent, hashes }
+  return { root, sent, hashes, removed }
 }
 let passed = 0
 function test(name, fn) { fn(); passed++; console.log('ok ' + name) }
@@ -32,13 +32,13 @@ for (const backend of ['vtai', 'classic']) {
       if (change === 'inactive') { x.root.active = false; x.root.restart() }
       if (change === 'backend') { x.root.backend = backend === 'vtai' ? 'classic' : 'vtai'; x.root.restart(true) }
       if (change === 'auth') x.root.stopWork('rejected')
-      x.hashes[0](0, 1, sha)
-      assert.equal(x.sent.length, 0); assert.equal(answer.cancelled, true)
+      x.hashes[0](0, 1, '/tmp/omarchy-vt-upload.Fake1234/sample')
+      assert.equal(x.sent.length, 0); assert.equal(answer.cancelled, true); assert.equal(x.removed.length, 1)
     })
   }
   test(backend + ' allows an unchanged authorized upload', () => {
     const x = setup(); x.root.backend = backend; x.root.upload(task(), () => {})
-    x.hashes[0](0, 1, sha); assert.equal(x.sent.length, 1)
+    x.hashes[0](0, 1, '/tmp/omarchy-vt-upload.Fake1234/sample'); assert.equal(x.sent.length, 1)
   })
 }
 test('withdrawal drops only queued uploads and releases their busy hashes', () => {
@@ -52,7 +52,7 @@ test('withdrawal drops only queued uploads and releases their busy hashes', () =
 })
 test('cancelled preparation releases accounting without recording an upload or error', () => {
   const x = setup(); x.root._busy[sha] = true; x.root.run(task())
-  x.root.autoUpload = false; x.root.uploadPermissionChanged(); x.hashes[0](0, 1, sha)
+  x.root.autoUpload = false; x.root.uploadPermissionChanged(); x.hashes[0](0, 1, '/tmp/omarchy-vt-upload.Fake1234/sample')
   assert.equal(x.root.inFlight, 0); assert.equal(x.root._busy[sha], undefined)
   assert.equal(x.root._st.cache[sha], undefined)
 })
@@ -69,6 +69,6 @@ test('deactivation still waits for the next state-file load', () => {
 test('an old upload retains its separate slot until its callback finishes', () => {
   const x = setup(); x.root.run(task()); assert.equal(x.root.uploadsInFlight, 1)
   x.root.active = false; x.root.restart(); assert.equal(x.root.uploadsInFlight, 1)
-  x.hashes[0](0, 1, sha); assert.equal(x.root.uploadsInFlight, 0)
+  x.hashes[0](0, 1, '/tmp/omarchy-vt-upload.Fake1234/sample'); assert.equal(x.root.uploadsInFlight, 0)
 })
 console.log(passed + ' lifecycle tests passed')

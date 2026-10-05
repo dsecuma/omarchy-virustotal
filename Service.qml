@@ -168,8 +168,13 @@ Item {
   property var _sessionShas: ({})
   property real _pauseUntil: 0
   property real _lastWatchLookup: 0
+  property var _uploadFiles: []
 
   Component.onCompleted: startup()
+  Component.onDestruction: {
+    for (var i = 0; i < root._uploadFiles.length; i++)
+      Quickshell.execDetached(["sh", "-c", Scripts.removeUpload, "sh", root._uploadFiles[i]])
+  }
 
   // ===========================================================================
   // Process plumbing
@@ -232,6 +237,25 @@ Item {
       var m = /^(\d+) ([a-f0-9]{64})$/.exec(String(out || "").trim())
       if (code === 0 && m) callback(0, Number(m[1]), m[2])
       else callback(code === 0 ? 5 : code, -1, "")
+    })
+  }
+
+  function prepareUploadFile(path, sha, callback) {
+    root.sh(Scripts.prepareUpload, [path, sha], 300000, function(code, out) {
+      var m = /^(\d+)\t(\/tmp\/omarchy-vt-upload\.[A-Za-z0-9]{8}\/sample)\n?$/.exec(String(out || ""))
+      if (code !== 0 || !m) {
+        callback(code === 0 ? 5 : code, -1, "")
+        return
+      }
+      root._uploadFiles = root._uploadFiles.concat([m[2]])
+      callback(0, Number(m[1]), m[2])
+    })
+  }
+
+  function removeUploadFile(path) {
+    if (root._uploadFiles.indexOf(path) < 0) return
+    root.sh(Scripts.removeUpload, [path], 10000, function(code) {
+      if (code === 0) root._uploadFiles = root._uploadFiles.filter(function(p) { return p !== path })
     })
   }
 
@@ -651,22 +675,29 @@ Item {
     var base = Model.copy(r)
     var name = r.name || Model.basename(r.path)
     root.setBusy("Uploading \u201c" + Model.truncate(name, 60) + "\u201d\u2026")
-    // Hash again right before sending: the SHA-256 in the URL must match the bytes.
-    root.hashFile(base.path, 0, Model.MAX_UPLOAD_BYTES, function(code, size, sha) {
-      if (seq !== root._scanSeq) return
+    // Verify a private snapshot, then send those exact bytes, even if the
+    // original path is replaced while the request is being prepared.
+    root.prepareUploadFile(base.path, base.sha256, function(code, size, snapshot) {
+      if (seq !== root._scanSeq || !root.connected || root.accountBusy) {
+        root.removeUploadFile(snapshot)
+        if (seq === root._scanSeq) root.fail("The connection changed before the upload. Connect and try again.")
+        return
+      }
       if (code === 8) {
         root.fail("The file is larger than the 32 MB upload limit.")
+        return
+      }
+      if (code === 6) {
+        root.fail("The file changed after it was checked. Check it again before uploading.")
         return
       }
       if (code !== 0) {
         root.fail(Model.hashErrorMessage(code, base.path))
         return
       }
-      if (sha !== base.sha256) {
-        root.fail("\u201c" + Model.truncate(name, 60) + "\u201d changed after it was checked. Check it again before uploading.")
-        return
-      }
-      root.api("POST", "/submissions/" + sha, { file: base.path, maxTime: 130 }, function(res) {
+      root.api("POST", "/submissions/" + base.sha256, { file: snapshot, maxTime: 130 }, function(res) {
+        root.removeUploadFile(snapshot)
+        if (seq !== root._scanSeq) return
         root.clearBusy()
         root.handleSubmission(base, res)
       })
