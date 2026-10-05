@@ -115,7 +115,7 @@ Enable it in **Settings → Plugins → Check installed plugins**. It watches `~
 - **What is sent**: each file is hashed locally and only its SHA-256 is looked up. `.git/`, symlinks and empty files are skipped, and at most 2,000 files per plugin are checked. Files shared by several plugins are looked up once. A file with a report is looked up again after 7 days; an unknown file after 1 hour.
 - **Uploads** happen only when **Upload unknown plugin files automatically** is on. Turning it on asks for your consent once, in a dialog. Uploads are standard, non-private submissions (see [Privacy and uploads](#privacy-and-uploads)). Files above 32 MB are never uploaded, and each file is hashed again right before sending. After an upload the scanner follows the analysis and looks the file up again a little later to collect AI insights.
 - **What counts as flagged**: only VirusTotal's own results. Engines flagged the file as malicious or suspicious, or a Code Insight / AI insight returned a malicious or suspicious verdict. The plugin makes no judgement of its own.
-- **Alerts**: a notification when a plugin is added or updated, and one when its scan finds flagged files (for example `VirusTotal flagged 2 files in <plugin>`). With **Notify for every checked file**, a scan without flagged files ends with a `No detections: <plugin>` notification. Flagged files also go into the history and light up the bar dot.
+- **Alerts**: a notification when a plugin is added or updated, and one when its scan finds flagged files (for example `VirusTotal flagged 2 files in <plugin>`). With **Notify for every checked file**, a completed scan without flagged files ends with a `No detections: <plugin>` notification; missing results, errors or partial coverage are reported as `Incomplete scan: <plugin>`. Flagged files also go into the history and light up the bar dot.
 - **Plugins tab** (<kbd>3</kbd>): every installed plugin with its status, flagged/total counts and the remaining quota. Click a plugin to list its files; click a file to open its VirusTotal report.
 
 ### Engine and quota
@@ -316,6 +316,7 @@ When the panel opens, the Scan tab's text field has focus: type, then press <kbd
 node tests/model.test.js     # pure logic in Model.js
 node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with fake curl and agent commands)
 node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
+node tests/coverage.test.js   # incomplete scans and notification accuracy
 node tests/filesystem.test.js # change detection and unusual filenames
 node tests/transport.test.js # backoff, upload recovery and local curl fixture
 node tests/lifecycle.test.js # QML controller methods with deferred callbacks (no desktop required)

@@ -2,6 +2,12 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.7 – 2026-10-06
+
+- Report incomplete scans when results are absent, all engines failed/timed out, requests failed, or plugin coverage is partial. Notifications no longer claim no detections for zero checked files.
+- Preserve engine/AI threat alerts and show errors, unknown files, pending analysis and skipped/truncated coverage in scan summaries.
+- Normalize cached engine totals without double-counting the existing total.
+
 ## 1.1.6 – 2026-10-06
 
 - Detect same-size rewrites of older files, renames and subsecond metadata changes using a digest of the complete sorted file metadata list instead of aggregate count/size/max-mtime.
