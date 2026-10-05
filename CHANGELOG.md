@@ -2,6 +2,12 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.4 – 2026-10-06
+
+- Cancel queued and preparing automatic uploads when permission is withdrawn. Invalidate stale hash callbacks across scanner shutdown, authentication failure, backend changes and permission off/on cycles.
+- Keep the plugin scanner running when switching between two connected engines; the unchanged state-file path no longer leaves it waiting for a load signal.
+- Add offline tests of the actual QML controller methods with deferred hash callbacks and fake services.
+
 ## 1.1.3 – 2026-10-03
 
 - **Notify for every checked file** moved to a new **Notifications** section in Settings. It now shows while the Downloads watcher or the plugin scanner is on: it has always applied to both, but it could only be changed while the watcher was on.
