@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.8"
+var DEFAULT_VERSION = "1.1.9"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -495,6 +495,16 @@ function fallbackReportUrl(kind, id) {
   return base + "search/" + encodeURIComponent(v)
 }
 
+// A URL report link is opened through a command line (browser launcher) and
+// may be handed to an agent, so it must identify the URL by its VirusTotal ID
+// (a SHA-256), never by the URL itself.
+function urlReportUrl(reportUrl, id) {
+  var s = String(reportUrl || "")
+  if (/^https:\/\/www\.virustotal\.com\/gui\/url\/[a-f0-9]{64}(\/[a-z-]*)?$/i.test(s)) return s
+  var v = String(id || "")
+  return /^[a-f0-9]{64}$/i.test(v) ? "https://www.virustotal.com/gui/url/" + v.toLowerCase() : ""
+}
+
 function baseResult(kind, target, extra) {
   var r = {
     kind: kind,
@@ -544,7 +554,7 @@ function resultFromReport(kind, target, data, extra) {
     : kind === "ip" ? (d.ip || r.target)
     : kind === "url" ? id
     : (r.sha256 || r.target)
-  r.reportUrl = safeReportUrl(d.report_url) || fallbackReportUrl(kind, fallbackId)
+  r.reportUrl = kind === "url" ? urlReportUrl(d.report_url, id) : (safeReportUrl(d.report_url) || fallbackReportUrl(kind, fallbackId))
   r.canUpload = false
   return r
 }
@@ -687,6 +697,24 @@ function displayTarget(r) {
   return r.target
 }
 
+// Scheme and host of a URL; anything after the host becomes "/…". Paths,
+// queries and fragments can carry private tokens (reset links, bearer
+// tokens), so this form is used wherever a checked URL would leave the shell
+// process through a command line (notifications, agent hand-off). The full URL
+// only stays in the panel and in the lookup request body, sent on stdin.
+function redactUrl(url) {
+  var m = /^([a-z][a-z0-9+.-]*:\/\/)([^\/?#]*)(.*)$/i.exec(String(url || ""))
+  if (!m) return ""
+  var host = m[2].replace(/^.*@/, "")
+  return m[1].toLowerCase() + host + (m[3] !== "" && m[3] !== "/" ? "/\u2026" : "")
+}
+
+// displayTarget() for text that is passed to another process as an argument.
+function processTarget(r) {
+  if (r && r.kind === "url") return redactUrl(r.target)
+  return displayTarget(r)
+}
+
 function uploadConsentMessage(r) {
   var name = r ? (r.name || basename(r.path)) : ""
   var size = r && r.size >= 0 ? " (" + formatBytes(r.size) + ")" : ""
@@ -697,7 +725,7 @@ function uploadConsentMessage(r) {
 }
 
 function notificationFor(r) {
-  var name = displayTarget(r)
+  var name = processTarget(r)
   var denom = ratedCount(r)
   var flagged = flaggedCount(r)
   var noun = r && r.source === "watcher" ? "download" : (r && r.source === "plugins" ? "plugin file" : "file")
