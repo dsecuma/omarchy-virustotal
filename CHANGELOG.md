@@ -2,6 +2,12 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.6 – 2026-10-06
+
+- Detect same-size rewrites of older files, renames and subsecond metadata changes using a digest of the complete sorted file metadata list instead of aggregate count/size/max-mtime.
+- Preserve valid filenames such as `__proto__` through scanning, caching, persistence and scheduling.
+- Add filesystem regressions across sh, bash and dash, including unusual names, excluded `.git` files and symlinks.
+
 ## 1.1.5 – 2026-10-06
 
 - Honor HTTP Retry-After (seconds or HTTP-date) for both API engines, and keep server polling hints at every stage.

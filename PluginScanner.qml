@@ -65,7 +65,7 @@ Item {
   property int _gen: 0
   property int _uploadGen: 0
   property var _hashQueue: []
-  property var _scans: ({})
+  property var _scans: Object.create(null)
   property bool _probing: false
   property bool _probeAgain: false
   property var _folder: null
@@ -89,7 +89,7 @@ Item {
     root._queue = []
     root._busy = {}
     root._hashQueue = []
-    root._scans = {}
+    root._scans = Object.create(null)
     root._probing = false
     root._probeAgain = false
     root.inFlight = 0
@@ -248,7 +248,7 @@ Item {
 
   function handleProbe(list) {
     var st = root._st
-    var seen = {}
+    var seen = Object.create(null)
     for (var i = 0; i < list.length; i++) {
       var p = list[i]
       seen[p.id] = true
@@ -463,7 +463,7 @@ Item {
     root._gen++
     root._queue = []
     root._busy = {}
-    root._scans = {}
+    root._scans = Object.create(null)
     root.inFlight = 0
     root.scanTotal = 0
     root.scanDone = 0
