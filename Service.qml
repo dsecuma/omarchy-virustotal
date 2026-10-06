@@ -214,8 +214,12 @@ Item {
                 "-A", root.userAgent, "-H", "@" + (classic ? root.apiKeyPath : root.authHeaderPath), "-H", "Accept: application/json",
                 "-w", Model.CURL_WRITE_OUT]
     if (method === "DELETE") argv.push("-X", "DELETE")
+    // Request bodies can carry user data (a checked URL may hold a token in its
+    // query or path), so they travel on stdin, never in the visible argv.
+    var body = ""
     if (o.json !== undefined) {
-      argv.push("-H", "Content-Type: application/json", "--data-raw", JSON.stringify(o.json))
+      body = JSON.stringify(o.json)
+      argv.push("-H", "Content-Type: application/json", "--data-binary", "@-")
     } else if (o.file) {
       // Standard (non-private) submission: the panel asked for consent first.
       argv.push("-H", "Content-Type: application/octet-stream", "-H", "X-VTAI-Consent: standard-v1",
@@ -228,7 +232,7 @@ Item {
       // curl cannot read a deleted credential file either; resync the state.
       if (!res.http && !classic) root.refreshCredentialPresence()
       callback(res)
-    })
+    }, body)
   }
 
   // callback(exitCode, size, sha256); see Scripts.hash for the exit codes.

@@ -2,6 +2,13 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.9 – 2026-10-06
+
+- Keep checked URLs out of process command lines, which other local users can read. The URL lookup body now reaches curl on stdin (`--data-binary @-`) instead of `--data-raw`, so a token in a URL's path, query or fragment is only shared with VirusTotal.
+- Notifications and agent hand-offs, which start other processes, show only the URL's scheme and host (`https://example.com/…`). The panel and history still show the full URL.
+- URL report links always use VirusTotal's URL ID (a SHA-256), never the URL itself.
+- Add regressions that check curl argv, notification argv, hand-off prompts and report links never contain any part of a URL after the host.
+
 ## 1.1.8 – 2026-10-06
 
 - Prepare a private, bounded copy before uploading a local file. Verify the copy against the SHA-256 that was looked up and send that exact copy through either API, so replacing the original path cannot change the submitted bytes.

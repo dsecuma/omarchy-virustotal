@@ -89,6 +89,7 @@ If you try a check before connecting, the panel keeps what you typed and runs it
 ## Privacy and uploads
 
 - A lookup sends only the URL, domain, IP or hash.
+- A checked URL never appears on a command line, where other local users could read it. The lookup request body goes to curl on stdin. Notifications and agent hand-offs show only the scheme and host (`https://example.com/…`), because a path, query or fragment can contain a private token. The panel and history keep the full URL.
 - A local file is hashed on your machine and only its SHA-256 is sent.
 - A file is uploaded only when you click **Upload for analysis** and accept the dialog. The upload is a *standard, non-private submission* (`X-VTAI-Consent: standard-v1`): the file becomes available to the VirusTotal security community and its partners. Don't upload personal documents, internal code or anything that contains credentials.
 - Before sending, the plugin creates a private temporary copy (directory mode 700, file mode 600), verifies its SHA-256 against the lookup and sends that exact copy. A changed file or file symlink is refused. Copies are removed after cancellation, request completion/failure and normal service teardown. A forced crash may leave a private `/tmp/omarchy-vt-upload.XXXXXXXX/` directory until temporary-file cleanup.

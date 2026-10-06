@@ -993,9 +993,14 @@ function handoffPrompt(r, ctx) {
     var type = cleanText(r.typeDescription, 80)
     if (type) lines.push(field("file type", type))
   } else {
-    var value = cleanText(r.target, 300)
+    // The prompt reaches the agent as a command-line argument, so a URL is
+    // reduced to its scheme and host (Model.redactUrl): the path, query and
+    // fragment can hold private tokens.
+    var value = cleanText(kind === "url" ? Model.redactUrl(r.target) : r.target, 300)
     if (!value) return ""
     lines.push(field(kind === "ip" ? "IP address" : kind, defang(kind, value)))
+    if (kind === "url" && /\u2026$/.test(value))
+      lines.push("  (Only the site is shown: the rest of the URL can contain private tokens and was left out. A report link, when present, identifies the full URL.)")
     fang = true
   }
   var ago = Model.timeAgo(r.time, c.now)
