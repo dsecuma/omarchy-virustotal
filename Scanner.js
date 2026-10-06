@@ -424,7 +424,7 @@ function fileResult(record, dir, rel, cache) {
 // Per-plugin totals, counted per file. Only VirusTotal's numbers are used.
 function summarize(record, cache, busy) {
   var s = { files: 0, checked: 0, flagged: 0, engineFlagged: 0, insightFlagged: 0, withMalicious: 0,
-            notFound: 0, analyzing: 0, errors: 0, pending: 0, flaggedFiles: [] }
+            notFound: 0, analyzing: 0, errors: 0, pending: 0, noResults: 0, flaggedFiles: [] }
   var files = record && record.files ? record.files : {}
   var rels = keys(files).sort()
   for (var i = 0; i < rels.length; i++) {
@@ -437,11 +437,12 @@ function summarize(record, cache, busy) {
       continue
     }
     if (e.status === "found") {
-      s.checked++
       var stats = Model.normalizeStats(e.stats)
       var probe = { status: "found", stats: stats, insight: e.insight }
       var engineHits = Model.flaggedCount(probe)
       var aiHit = Model.insightFlags(probe)
+      if (Model.usableEngineCount(probe) > 0 || aiHit) s.checked++
+      else s.noResults++
       if (engineHits > 0 || aiHit) {
         s.flagged++
         if (engineHits > 0) s.engineFlagged++
@@ -488,6 +489,7 @@ function pluginStatus(summary) {
   if (s.notFound > 0) extra.push(s.notFound + " unknown to VirusTotal")
   if (s.analyzing > 0) extra.push(s.analyzing + " analyzing")
   if (s.errors > 0) extra.push(plural(s.errors, "error"))
+  if (s.noResults > 0) extra.push(s.noResults + " without engine verdicts")
   var tail = extra.length ? " \u00b7 " + extra.join(" \u00b7 ") : ""
   if (s.flagged > 0) {
     var role = s.withMalicious > 0 ? "danger" : "warning"
@@ -506,7 +508,7 @@ function fileStatus(entry, busy) {
     var r = { status: "found", stats: Model.normalizeStats(entry.stats), engines: entry.engines, insight: entry.insight }
     var label = Model.verdictLabel(r)
     if (Model.insightFlags(r)) label += " \u00b7 AI insight: " + (entry.insight.rawVerdict || entry.insight.verdict)
-    var role = r.stats.malicious > 0 ? "danger" : (Model.hasFlags(r) ? "warning" : "ok")
+    var role = r.stats.malicious > 0 ? "danger" : (Model.hasFlags(r) ? "warning" : (Model.usableEngineCount(r) ? "ok" : "muted"))
     return { label: label, role: role }
   }
   if (entry.status === "not_found") return { label: "Unknown to VirusTotal", role: "muted" }
@@ -541,7 +543,15 @@ function summaryNotification(record, summary, notifyAll) {
   if (!notifyAll) return null
   var body = "0 of " + plural(s.checked, "checked file") + " flagged."
   if (s.notFound > 0) body += " " + s.notFound + " unknown to VirusTotal."
-  return { urgency: "low", glyph: Model.Glyph.shieldCheck, title: "No detections: " + name, body: body }
+  if (s.errors > 0) body += " " + plural(s.errors, "error") + "."
+  if (s.analyzing > 0) body += " " + s.analyzing + " still analyzing."
+  if (s.pending > 0) body += " " + s.pending + " pending."
+  if (s.noResults > 0) body += " " + s.noResults + " without engine verdicts."
+  if (record.truncated) body += " File limit reached; only part of the plugin was checked."
+  if (record.skipped > 0) body += " " + record.skipped + " files skipped (unusual names)."
+  var incomplete = record.truncated || record.skipped > 0 || s.checked === 0 || s.notFound > 0 || s.errors > 0 || s.analyzing > 0 || s.pending > 0 || s.noResults > 0
+  return { urgency: "low", glyph: incomplete ? Model.Glyph.helpCircle : Model.Glyph.shieldCheck,
+           title: (incomplete ? "Incomplete scan: " : "No detections: ") + name, body: body }
 }
 
 // --- persisted state ---------------------------------------------------------
