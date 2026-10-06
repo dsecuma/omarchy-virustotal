@@ -15,12 +15,12 @@ var startup = [
   "umask 077",
   "mkdir -p \"$1\" \"$2\" 2>/dev/null",
   "missing=",
-  "for tool in curl sha256sum stat date; do",
+  "for tool in curl sha256sum stat date head mktemp; do",
   "  command -v \"$tool\" >/dev/null 2>&1 || missing=\"$missing $tool\"",
   "done",
   "printf 'missing=%s\\n' \"${missing# }\"",
   "scanmissing=",
-  "for tool in find awk head; do",
+  "for tool in find sort head; do",
   "  command -v \"$tool\" >/dev/null 2>&1 || scanmissing=\"$scanmissing $tool\"",
   "done",
   "printf 'scanmissing=%s\\n' \"${scanmissing# }\"",
@@ -117,9 +117,10 @@ var notify = [
 // --- installed-plugin scanner ------------------------------------------------
 
 // One line per plugin folder in $1 (normally ~/.config/omarchy/plugins):
-// "dir\thead\tcount size mtime\tversion\tname\tlink|dir". head is the git
-// commit or "-". The count/size/mtime stamp changes whenever any file is
-// added, removed or rewritten, so the scanner only rehashes changed plugins.
+// "dir\thead\tmetadata digest\tversion\tname\tlink|dir". head is the git
+// commit or "-". Digest sorted NUL-terminated records containing each path,
+// size, nanosecond mtime and ctime. Aggregate counts/maxima miss edits and
+// renames. This is change detection, not a security boundary against a writer.
 // Folders whose names contain tabs or newlines are skipped.
 var probePlugins = [
   "cd \"$1\" 2>/dev/null || exit 3",
@@ -135,7 +136,8 @@ var probePlugins = [
   "  if [ -e \"$d/.git\" ] && command -v git >/dev/null 2>&1; then",
   "    head=$(git -C \"$d\" rev-parse HEAD 2>/dev/null) || head=-",
   "  fi",
-  "  stamp=$(find \"$d/\" -name .git -prune -o -type f -printf '%T@ %s\\n' 2>/dev/null | awk '{ n++; s += $2; if ($1 > m) m = $1 } END { printf \"%d %d %d\", n, s, m }')",
+  "  stamp=$(find \"./$d/\" -name .git -prune -o -type f -printf '%P\\t%s\\t%T@\\t%C@\\0' 2>/dev/null | LC_ALL=C sort -z | sha256sum)",
+  "  stamp=${stamp%% *}",
   "  ver= name=",
   "  if [ -f \"$d/manifest.json\" ]; then",
   "    ver=$(sed -n 's/^[[:space:]]*\"version\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"$d/manifest.json\" | head -n 1)",
@@ -186,7 +188,36 @@ var saveApiKey = [
 // The file travels on stdin so curl -F never parses the local path (';' ',').
 var classicUpload = [
   "[ -f \"$1\" ] && [ -r \"$1\" ] || exit 3",
-  "exec curl -sS --proto =https --connect-timeout 10 --max-time \"${5:-130}\" -A \"$4\" -H \"@$2\" -H 'Accept: application/json' -w '\\n%{http_code}' -F 'file=@-;filename=sample' \"$3\" < \"$1\""
+  "exec curl -sS --proto =https --connect-timeout 10 --max-time \"${5:-130}\" -A \"$4\" -H \"@$2\" -H 'Accept: application/json' -w '\\n%{http_code}\\nretry-after:%header{retry-after}' -F 'file=@-;filename=sample' \"$3\" < \"$1\""
+].join("\n")
+
+// Bounded private snapshot; $1 source path, $2 expected SHA-256. The caller
+// owns the returned file and must remove it after cancellation or transmission.
+// stdout: size<TAB>snapshot. Exit codes match hash. No network or credentials.
+var prepareUpload = [
+  "umask 077",
+  "source=$1 expected=$2",
+  "case $expected in ''|*[!a-f0-9]*) exit 5 ;; esac",
+  "[ ${#expected} -eq 64 ] || exit 5",
+  "[ -f \"$source\" ] && [ ! -L \"$source\" ] || exit 3",
+  "[ -r \"$source\" ] || exit 4",
+  "dir=$(mktemp -d /tmp/omarchy-vt-upload.XXXXXXXX) || exit 5",
+  "trap 'rm -f -- \"$dir/sample\"; rmdir -- \"$dir\"' 0",
+  "trap 'exit 6' HUP INT TERM",
+  "head -c 32000001 -- \"$source\" > \"$dir/sample\" || exit 5",
+  "size=$(stat -c %s -- \"$dir/sample\") || exit 5",
+  "[ \"$size\" -gt 0 ] || exit 7",
+  "[ \"$size\" -le 32000000 ] || exit 8",
+  "sum=$(sha256sum < \"$dir/sample\") || exit 5",
+  "[ \"${sum%% *}\" = \"$expected\" ] || exit 6",
+  "printf '%s\\t%s\\n' \"$size\" \"$dir/sample\"",
+  "trap - 0 HUP INT TERM"
+].join("\n")
+
+// Only remove our generated snapshot filename and its now-empty directory.
+var removeUpload = [
+  "case $1 in /tmp/omarchy-vt-upload.????????/sample) ;; *) exit 2 ;; esac",
+  "rm -f -- \"$1\" && rmdir -- \"${1%/sample}\""
 ].join("\n")
 
 // --- coding agents (AgentsManager.qml) ----------------------------------------

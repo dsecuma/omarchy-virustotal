@@ -2,6 +2,31 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.8 – 2026-10-06
+
+- Prepare a private, bounded copy before uploading a local file. Verify the copy against the SHA-256 that was looked up and send that exact copy through either API, so replacing the original path cannot change the submitted bytes.
+- Recheck scanner permission after preparation and clean copies after cancellation, request completion/failure and normal service teardown. Refuse file symlinks at preparation time.
+- Add shell and controller regressions for changed files, size bounds, permissions, cancellation and exact-byte transmission. No live submissions are needed for these tests.
+
+## 1.1.7 – 2026-10-06
+
+- Report incomplete scans when results are absent, all engines failed/timed out, requests failed, or plugin coverage is partial. Notifications no longer claim no detections for zero checked files.
+- Preserve engine/AI threat alerts and show errors, unknown files, pending analysis and skipped/truncated coverage in scan summaries.
+- Normalize cached engine totals without double-counting the existing total.
+
+## 1.1.6 – 2026-10-06
+
+- Detect same-size rewrites of older files, renames and subsecond metadata changes using a digest of the complete sorted file metadata list instead of aggregate count/size/max-mtime.
+- Preserve valid filenames such as `__proto__` through scanning, caching, persistence and scheduling.
+- Add filesystem regressions across sh, bash and dash, including unusual names, excluded `.git` files and symlinks.
+
+## 1.1.5 – 2026-10-06
+
+- Honor HTTP Retry-After (seconds or HTTP-date) for both API engines, and keep server polling hints at every stage.
+- Serialize and pace automatic uploads independently of parallel lookups. Preserve the recent quota window when rebuilding the limiter.
+- Recover uncertain VTAI uploads with GET on the same SHA-256 receipt. Classic uploads fall back to a hash lookup. Ambiguous server/proxy failures no longer trigger another POST; explicit VTAI pre-admission capacity rejection remains retryable.
+- Add offline transport/controller regressions and a real curl loopback fixture. Requires curl 7.84 or newer for response-header write-out (available on current Omarchy).
+
 ## 1.1.4 – 2026-10-06
 
 - Cancel queued and preparing automatic uploads when permission is withdrawn. Invalidate stale hash callbacks across scanner shutdown, authentication failure, backend changes and permission off/on cycles.

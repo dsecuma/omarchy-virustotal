@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.4"
+var DEFAULT_VERSION = "1.1.8"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -382,10 +382,13 @@ function normalizeStats(stats) {
   if (!stats || typeof stats !== "object") return out
   for (var k in stats) {
     if (!Object.prototype.hasOwnProperty.call(stats, k)) continue
+    if (k === "total") continue
     var n = num(stats[k])
     out.total += n
     if (k === "malicious" || k === "suspicious" || k === "harmless" || k === "undetected") out[k] = n
   }
+  // Cached normalized stats already contain total; do not count it twice.
+  out.total = Math.max(out.total, num(stats.total))
   return out
 }
 
@@ -460,7 +463,7 @@ function pickInsight(list) {
 function verdictFor(stats) {
   if (stats.malicious > 0) return "malicious"
   if (stats.suspicious > 0) return "suspicious"
-  if (stats.total > 0) return "undetected"
+  if (usableEngineCount({ stats: stats }) > 0) return "undetected"
   return "unknown"
 }
 
@@ -616,7 +619,7 @@ function verdictLabel(r) {
   case "error": return "Error"
   }
   var denom = ratedCount(r)
-  if (!denom) return "No engine results"
+  if (!usableEngineCount(r)) return "No engine results"
   var flagged = flaggedCount(r)
   return flagged > 0 ? flagged + "/" + denom + " flagged" : "No detections"
 }
@@ -655,12 +658,18 @@ function ratedCount(r) {
   return rated || (r ? r.engines : 0) || s.total
 }
 
+// Timeouts, failures and engine inventory counts are not returned verdicts.
+function usableEngineCount(r) {
+  var s = r && r.stats ? r.stats : {}
+  return num(s.malicious) + num(s.suspicious) + num(s.harmless) + num(s.undetected)
+}
+
 function summaryLine(r) {
   if (!r) return ""
   if (r.status !== "found") return r.message || ""
   var s = r.stats
   var denom = ratedCount(r)
-  if (!denom) return "VirusTotal returned no engine results for this " + kindNoun(r.kind) + "."
+  if (!usableEngineCount(r)) return "VirusTotal returned no engine verdicts for this " + kindNoun(r.kind) + "."
   var line = "Malicious " + s.malicious + " \u00b7 Suspicious " + s.suspicious
     + " \u00b7 Harmless " + s.harmless + " \u00b7 Undetected " + s.undetected
   if (flaggedCount(r) === 0) line += ". No detections is not a guarantee of safety."
@@ -706,6 +715,10 @@ function notificationFor(r) {
   if (r && r.status === "not_found") {
     return { urgency: "low", glyph: Glyph.helpCircle, title: "Unknown to VirusTotal: " + name,
              body: "No report exists yet. You can upload it from the VirusTotal panel." }
+  }
+  if (!r || r.status !== "found" || !usableEngineCount(r)) {
+    return { urgency: "low", glyph: Glyph.helpCircle, title: "Incomplete scan: " + name,
+             body: "No engine verdicts are available. Open the VirusTotal panel for details." }
   }
   return { urgency: "low", glyph: Glyph.shieldCheck, title: "No detections: " + name,
            body: "0 of " + denom + " security vendors flagged it." }
@@ -754,16 +767,31 @@ function themeYellow(raw) {
 
 // --- errors ------------------------------------------------------------------
 
-// curl is invoked with -w "\n%{http_code}", so the status is the last line.
-function parseCurlOutput(out) {
+// curl >= 7.84: capture the final response's Retry-After without logging headers.
+var CURL_WRITE_OUT = "\n%{http_code}\nretry-after:%header{retry-after}"
+
+function retryAfterSeconds(value, now) {
+  var s = String(value || "").trim()
+  if (/^\d+$/.test(s)) return num(s)
+  // Reject numeric/ambiguous strings which Date.parse accepts as calendar years.
+  if (!/^[A-Za-z]{3},?\s/.test(s)) return 0
+  var date = Date.parse(s)
+  return isFinite(date) ? Math.max(0, Math.ceil((date - (now === undefined ? Date.now() : now)) / 1000)) : 0
+}
+
+function parseCurlOutput(out, now) {
   var s = String(out || "").replace(/\s+$/, "")
+  var trailer = /\nretry-after:([^\r\n]*)$/.exec(s)
+  if (trailer) s = s.slice(0, trailer.index)
   var idx = s.lastIndexOf("\n")
   var codeText = (idx >= 0 ? s.slice(idx + 1) : s).trim()
   if (!/^\d{3}$/.test(codeText)) return { http: 0, body: s }
-  return { http: parseInt(codeText, 10), body: idx >= 0 ? s.slice(0, idx) : "" }
+  var result = { http: parseInt(codeText, 10), body: idx >= 0 ? s.slice(0, idx) : "" }
+  if (trailer) result.retryAfter = retryAfterSeconds(trailer[1], now)
+  return result
 }
 
-function apiError(http, json, exitCode) {
+function apiError(http, json, exitCode, retryAfter) {
   var d = json && typeof json === "object" ? json.detail : null
   var message = ""
   var retry = 0
@@ -777,6 +805,7 @@ function apiError(http, json, exitCode) {
     code = String(d.code || "")
     retry = num(d.retry_after_seconds) || num(d.retry_after)
   }
+  retry = Math.max(retry, num(retryAfter))
   if (!http) {
     if (exitCode === 127)
       return { kind: "missing_tool", code: code, retryAfter: 0, message: "curl is not installed. Install it and try again." }
@@ -833,11 +862,10 @@ function hashErrorMessage(exitCode, path) {
 
 // --- polling -----------------------------------------------------------------
 
-// Analysis polls: the server hint (>= 5 s) for the first 6 polls, then 10 s,
-// then 15 s. 24 polls cover roughly 4.5 minutes.
+// Local backoff is a minimum; every poll must also respect the server hint.
 function pollDelayMs(polls, nextPollSeconds) {
   var n = Number(polls) || 0
-  var seconds = n < 6 ? Math.max(num(nextPollSeconds) || 5, 5) : (n < 12 ? 10 : 15)
+  var seconds = Math.max(num(nextPollSeconds), n < 6 ? 5 : (n < 12 ? 10 : 15))
   return seconds * 1000
 }
 

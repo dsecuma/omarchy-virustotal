@@ -95,7 +95,8 @@ function makeLimiter(backendId, overrides, persisted, now) {
   var ks = keys(limits)
   for (var i = 0; i < ks.length; i++) {
     l.used[ks[i]] = restore ? Model.num(p.used[ks[i]]) : 0
-    l.recent[ks[i]] = []
+    var recent = restore && p.recent && Array.isArray(p.recent[ks[i]]) ? p.recent[ks[i]] : []
+    l.recent[ks[i]] = recent.filter(function(t) { return typeof t === "number" && isFinite(t) && t <= now && now - t < MIN_MS }).sort(function(a, b) { return a - b })
   }
   return l
 }
@@ -131,6 +132,8 @@ function waitMs(limiter, cls, now) {
   if ((limiter.used[key] || 0) >= lim.perDay) return Math.max(1000, nextUtcMidnight(now) - now)
   var r = pruneWindow(limiter, key, now)
   if (r.length >= lim.perMin) return Math.max(1, r[0] + MIN_MS - now)
+  // A minute quota is not permission to burst all uploads at once.
+  if (cls === "upload" && r.length) return Math.max(0, r[r.length - 1] + Math.ceil(MIN_MS / lim.perMin) - now)
   return 0
 }
 
@@ -157,14 +160,14 @@ function quotaInfo(limiter, now) {
 }
 
 function persistLimiter(limiter) {
-  return limiter ? { backend: limiter.backend, day: limiter.day, used: Model.copy(limiter.used) } : null
+  return limiter ? { backend: limiter.backend, day: limiter.day, used: Model.copy(limiter.used), recent: Model.copy(limiter.recent) } : null
 }
 
 // --- scheduler ---------------------------------------------------------------
 
 // Tasks: { type: "lookup" | "upload" | "poll", sha, notBefore, attempts, ... }.
 // Polls go first (they finish work already paid for), then lookups, then uploads.
-var PRIORITY = { poll: 0, lookup: 1, upload: 2 }
+var PRIORITY = { receipt: 0, poll: 0, lookup: 1, upload: 2 }
 
 function taskClass(task) {
   return task && task.type === "upload" ? "upload" : "lookup"
@@ -193,6 +196,7 @@ function dispatch(s, now) {
     return (pa === undefined ? 9 : pa) - (pb === undefined ? 9 : pb) || a - b
   })
   var maxParallel = Math.max(1, s.maxParallel || 1)
+  var uploads = s.uploadsInFlight || 0
   var started = {}
   for (var j = 0; j < order.length; j++) {
     if ((s.inFlight || 0) + start.length >= maxParallel) {
@@ -201,6 +205,8 @@ function dispatch(s, now) {
     }
     var idx = order[j]
     var t = queue[idx]
+    // One scanner upload at a time; report lookups still use all other slots.
+    if (t.type === "upload" && uploads >= 1) continue
     if ((t.notBefore || 0) > now) {
       wake(t.notBefore)
       continue
@@ -211,6 +217,7 @@ function dispatch(s, now) {
       continue
     }
     if (s.limiter) take(s.limiter, taskClass(t), now)
+    if (t.type === "upload") uploads++
     start.push(t)
     started[idx] = true
   }
@@ -228,7 +235,7 @@ function cleanText(value, max) {
   return Model.truncate(String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim(), max || 120)
 }
 
-// Scripts.probePlugins: "dir\thead\tcount size mtime\tversion\tname\tlink".
+// Scripts.probePlugins: "dir\thead\tmetadata digest\tversion\tname\tlink".
 function parseProbe(text) {
   var out = []
   var lines = String(text || "").split("\n")
@@ -251,7 +258,7 @@ function parseProbe(text) {
 // Scripts.hashPlugin: "#\t<total>\t<skipped>" then "sha256\tsize\trelpath".
 function parseHashList(text, maxFiles) {
   var max = maxFiles || MAX_FILES_PER_PLUGIN
-  var files = {}
+  var files = Object.create(null)
   var count = 0
   var total = 0
   var skipped = 0
@@ -417,7 +424,7 @@ function fileResult(record, dir, rel, cache) {
 // Per-plugin totals, counted per file. Only VirusTotal's numbers are used.
 function summarize(record, cache, busy) {
   var s = { files: 0, checked: 0, flagged: 0, engineFlagged: 0, insightFlagged: 0, withMalicious: 0,
-            notFound: 0, analyzing: 0, errors: 0, pending: 0, flaggedFiles: [] }
+            notFound: 0, analyzing: 0, errors: 0, pending: 0, noResults: 0, flaggedFiles: [] }
   var files = record && record.files ? record.files : {}
   var rels = keys(files).sort()
   for (var i = 0; i < rels.length; i++) {
@@ -430,11 +437,12 @@ function summarize(record, cache, busy) {
       continue
     }
     if (e.status === "found") {
-      s.checked++
       var stats = Model.normalizeStats(e.stats)
       var probe = { status: "found", stats: stats, insight: e.insight }
       var engineHits = Model.flaggedCount(probe)
       var aiHit = Model.insightFlags(probe)
+      if (Model.usableEngineCount(probe) > 0 || aiHit) s.checked++
+      else s.noResults++
       if (engineHits > 0 || aiHit) {
         s.flagged++
         if (engineHits > 0) s.engineFlagged++
@@ -481,6 +489,7 @@ function pluginStatus(summary) {
   if (s.notFound > 0) extra.push(s.notFound + " unknown to VirusTotal")
   if (s.analyzing > 0) extra.push(s.analyzing + " analyzing")
   if (s.errors > 0) extra.push(plural(s.errors, "error"))
+  if (s.noResults > 0) extra.push(s.noResults + " without engine verdicts")
   var tail = extra.length ? " \u00b7 " + extra.join(" \u00b7 ") : ""
   if (s.flagged > 0) {
     var role = s.withMalicious > 0 ? "danger" : "warning"
@@ -499,7 +508,7 @@ function fileStatus(entry, busy) {
     var r = { status: "found", stats: Model.normalizeStats(entry.stats), engines: entry.engines, insight: entry.insight }
     var label = Model.verdictLabel(r)
     if (Model.insightFlags(r)) label += " \u00b7 AI insight: " + (entry.insight.rawVerdict || entry.insight.verdict)
-    var role = r.stats.malicious > 0 ? "danger" : (Model.hasFlags(r) ? "warning" : "ok")
+    var role = r.stats.malicious > 0 ? "danger" : (Model.hasFlags(r) ? "warning" : (Model.usableEngineCount(r) ? "ok" : "muted"))
     return { label: label, role: role }
   }
   if (entry.status === "not_found") return { label: "Unknown to VirusTotal", role: "muted" }
@@ -534,13 +543,21 @@ function summaryNotification(record, summary, notifyAll) {
   if (!notifyAll) return null
   var body = "0 of " + plural(s.checked, "checked file") + " flagged."
   if (s.notFound > 0) body += " " + s.notFound + " unknown to VirusTotal."
-  return { urgency: "low", glyph: Model.Glyph.shieldCheck, title: "No detections: " + name, body: body }
+  if (s.errors > 0) body += " " + plural(s.errors, "error") + "."
+  if (s.analyzing > 0) body += " " + s.analyzing + " still analyzing."
+  if (s.pending > 0) body += " " + s.pending + " pending."
+  if (s.noResults > 0) body += " " + s.noResults + " without engine verdicts."
+  if (record.truncated) body += " File limit reached; only part of the plugin was checked."
+  if (record.skipped > 0) body += " " + record.skipped + " files skipped (unusual names)."
+  var incomplete = record.truncated || record.skipped > 0 || s.checked === 0 || s.notFound > 0 || s.errors > 0 || s.analyzing > 0 || s.pending > 0 || s.noResults > 0
+  return { urgency: "low", glyph: incomplete ? Model.Glyph.helpCircle : Model.Glyph.shieldCheck,
+           title: (incomplete ? "Incomplete scan: " : "No detections: ") + name, body: body }
 }
 
 // --- persisted state ---------------------------------------------------------
 
 function sanitizeFiles(files) {
-  var out = {}
+  var out = Object.create(null)
   var ks = keys(files)
   for (var i = 0; i < ks.length && i < MAX_FILES_PER_PLUGIN; i++) {
     var f = files[ks[i]]
@@ -551,7 +568,7 @@ function sanitizeFiles(files) {
 
 function parseState(text) {
   var j = Model.parseJson(text)
-  var s = { version: 1, baselineDone: false, plugins: {}, cache: {}, quota: null }
+  var s = { version: 1, baselineDone: false, plugins: Object.create(null), cache: {}, quota: null }
   if (!j || typeof j !== "object" || Array.isArray(j)) return s
   s.baselineDone = j.baselineDone === true
   var ps = keys(j.plugins)
@@ -659,7 +676,7 @@ function classicUploadId(json) {
 }
 
 // Classic API errors ({"error": {"code", "message"}}) -> Model.apiError shape.
-function classicError(http, json, exitCode) {
+function classicError(http, json, exitCode, retryAfter) {
   var err = json && json.error && typeof json.error === "object" ? json.error : {}
   var code = String(err.code || "")
   var message = String(err.message || "")
@@ -672,11 +689,11 @@ function classicError(http, json, exitCode) {
       || code === "ForbiddenError" || code === "UserNotActiveError")
     return { kind: "auth", code: code, retryAfter: 0, message: "VirusTotal rejected the API key. Check it in Settings." }
   if (http === 429 || code === "QuotaExceededError" || code === "TooManyRequestsError")
-    return { kind: "rate_limit", code: code, retryAfter: 60, message: "API key quota reached; waiting before the next request." }
+    return { kind: "rate_limit", code: code, retryAfter: Math.max(60, Model.num(retryAfter)), message: "API key quota reached; waiting before the next request." }
   if (http === 413)
     return { kind: "too_large", code: code, retryAfter: 0, message: "The file is larger than the 32 MB upload limit." }
   if (http >= 500)
-    return { kind: "unavailable", code: code, retryAfter: 0, message: "VirusTotal is temporarily unavailable (HTTP " + http + ")." }
+    return { kind: "unavailable", code: code, retryAfter: Model.num(retryAfter), message: "VirusTotal is temporarily unavailable (HTTP " + http + ")." }
   return { kind: "http", code: code, retryAfter: 0,
            message: (message ? Model.truncate(message, 200) : "The request failed") + " (HTTP " + http + ")." }
 }

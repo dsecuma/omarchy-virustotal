@@ -168,8 +168,13 @@ Item {
   property var _sessionShas: ({})
   property real _pauseUntil: 0
   property real _lastWatchLookup: 0
+  property var _uploadFiles: []
 
   Component.onCompleted: startup()
+  Component.onDestruction: {
+    for (var i = 0; i < root._uploadFiles.length; i++)
+      Quickshell.execDetached(["sh", "-c", Scripts.removeUpload, "sh", root._uploadFiles[i]])
+  }
 
   // ===========================================================================
   // Process plumbing
@@ -207,7 +212,7 @@ Item {
     var maxTime = o.maxTime || 40
     var argv = ["curl", "-sS", "--proto", "=https", "--connect-timeout", "10", "--max-time", String(maxTime),
                 "-A", root.userAgent, "-H", "@" + (classic ? root.apiKeyPath : root.authHeaderPath), "-H", "Accept: application/json",
-                "-w", "\n%{http_code}"]
+                "-w", Model.CURL_WRITE_OUT]
     if (method === "DELETE") argv.push("-X", "DELETE")
     if (o.json !== undefined) {
       argv.push("-H", "Content-Type: application/json", "--data-raw", JSON.stringify(o.json))
@@ -219,7 +224,7 @@ Item {
     argv.push((classic ? root.classicApiBase : root.apiBase) + path)
     root.runJob(argv, (maxTime + 20) * 1000, function(code, out) {
       var parsed = Model.parseCurlOutput(out)
-      var res = { exitCode: code, http: parsed.http, body: parsed.body, json: Model.parseJson(parsed.body) }
+      var res = { exitCode: code, http: parsed.http, body: parsed.body, retryAfter: parsed.retryAfter, json: Model.parseJson(parsed.body) }
       // curl cannot read a deleted credential file either; resync the state.
       if (!res.http && !classic) root.refreshCredentialPresence()
       callback(res)
@@ -232,6 +237,25 @@ Item {
       var m = /^(\d+) ([a-f0-9]{64})$/.exec(String(out || "").trim())
       if (code === 0 && m) callback(0, Number(m[1]), m[2])
       else callback(code === 0 ? 5 : code, -1, "")
+    })
+  }
+
+  function prepareUploadFile(path, sha, callback) {
+    root.sh(Scripts.prepareUpload, [path, sha], 300000, function(code, out) {
+      var m = /^(\d+)\t(\/tmp\/omarchy-vt-upload\.[A-Za-z0-9]{8}\/sample)\n?$/.exec(String(out || ""))
+      if (code !== 0 || !m) {
+        callback(code === 0 ? 5 : code, -1, "")
+        return
+      }
+      root._uploadFiles = root._uploadFiles.concat([m[2]])
+      callback(0, Number(m[1]), m[2])
+    })
+  }
+
+  function removeUploadFile(path) {
+    if (root._uploadFiles.indexOf(path) < 0) return
+    root.sh(Scripts.removeUpload, [path], 10000, function(code) {
+      if (code === 0) root._uploadFiles = root._uploadFiles.filter(function(p) { return p !== path })
     })
   }
 
@@ -471,7 +495,7 @@ Item {
         if (manual) root.accountMessage = "VirusTotal AI rejected the saved token."
         return
       }
-      if (manual) root.accountMessage = Model.apiError(res.http, res.json, res.exitCode).message
+      if (manual) root.accountMessage = Model.apiError(res.http, res.json, res.exitCode, res.retryAfter).message
     })
   }
 
@@ -512,7 +536,7 @@ Item {
       var revoked = res.http === 204 || res.http === 200
       if (!revoked && res.http !== 401 && res.http !== 403) {
         root.accountBusy = false
-        root.accountMessage = "Could not revoke the token: " + Model.apiError(res.http, res.json, res.exitCode).message
+        root.accountMessage = "Could not revoke the token: " + Model.apiError(res.http, res.json, res.exitCode, res.retryAfter).message
         return
       }
       root.sh(Scripts.removeFile, [root.authHeaderPath], 10000, function(code) {
@@ -564,7 +588,7 @@ Item {
   }
 
   function reportError(res) {
-    var e = Model.apiError(res.http, res.json, res.exitCode)
+    var e = Model.apiError(res.http, res.json, res.exitCode, res.retryAfter)
     root.noteAuthError(e)
     root.errorMessage = e.message
     return e
@@ -651,22 +675,29 @@ Item {
     var base = Model.copy(r)
     var name = r.name || Model.basename(r.path)
     root.setBusy("Uploading \u201c" + Model.truncate(name, 60) + "\u201d\u2026")
-    // Hash again right before sending: the SHA-256 in the URL must match the bytes.
-    root.hashFile(base.path, 0, Model.MAX_UPLOAD_BYTES, function(code, size, sha) {
-      if (seq !== root._scanSeq) return
+    // Verify a private snapshot, then send those exact bytes, even if the
+    // original path is replaced while the request is being prepared.
+    root.prepareUploadFile(base.path, base.sha256, function(code, size, snapshot) {
+      if (seq !== root._scanSeq || !root.connected || root.accountBusy) {
+        root.removeUploadFile(snapshot)
+        if (seq === root._scanSeq) root.fail("The connection changed before the upload. Connect and try again.")
+        return
+      }
       if (code === 8) {
         root.fail("The file is larger than the 32 MB upload limit.")
+        return
+      }
+      if (code === 6) {
+        root.fail("The file changed after it was checked. Check it again before uploading.")
         return
       }
       if (code !== 0) {
         root.fail(Model.hashErrorMessage(code, base.path))
         return
       }
-      if (sha !== base.sha256) {
-        root.fail("\u201c" + Model.truncate(name, 60) + "\u201d changed after it was checked. Check it again before uploading.")
-        return
-      }
-      root.api("POST", "/submissions/" + sha, { file: base.path, maxTime: 130 }, function(res) {
+      root.api("POST", "/submissions/" + base.sha256, { file: snapshot, maxTime: 130 }, function(res) {
+        root.removeUploadFile(snapshot)
+        if (seq !== root._scanSeq) return
         root.clearBusy()
         root.handleSubmission(base, res)
       })
@@ -807,7 +838,7 @@ Item {
         else root.updateAnalysis(base, j.pending_reason, j.next_poll_after_seconds)
         return
       }
-      var e = Model.apiError(res.http, j, res.exitCode)
+      var e = Model.apiError(res.http, j, res.exitCode, res.retryAfter)
       if (e.kind === "auth" || res.http === 404) {
         root.noteAuthError(e)
         var lost = Model.unknownSubmissionResult(base, e.kind === "auth" ? e.message
@@ -821,7 +852,7 @@ Item {
         root.updateAnalysis(base, "", 0)
         return
       }
-      root.schedulePoll(e.kind === "rate_limit" ? Math.max(e.retryAfter, 10) * 1000 : 15000)
+      root.schedulePoll(Math.max(e.retryAfter || 0, e.kind === "rate_limit" ? 10 : 15) * 1000)
     })
   }
 
@@ -1280,7 +1311,7 @@ Item {
         return
       }
       delete root._sessionShas[sha]
-      var e = Model.apiError(res.http, res.json, res.exitCode)
+      var e = Model.apiError(res.http, res.json, res.exitCode, res.retryAfter)
       if (e.kind === "auth") {
         // credentialState turns invalid, which stops the watcher.
         root.noteAuthError(e)

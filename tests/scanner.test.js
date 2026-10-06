@@ -69,7 +69,7 @@ test("limiter restores today's counters only", () => {
   assert.strictEqual(other.used.any, 0)
   const wrong = S.makeLimiter("vtai", null, p, T0)
   assert.strictEqual(wrong.used.lookup, 0)
-  same(S.persistLimiter(l), { backend: "classic", day: "2026-09-30", used: { any: 500 } })
+  same(S.persistLimiter(l), { backend: "classic", day: "2026-09-30", used: { any: 500 }, recent: { any: [T0] } })
 })
 
 // --- dispatcher ----------------------------------------------------------------

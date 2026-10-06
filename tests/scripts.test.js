@@ -61,7 +61,7 @@ function test(name, fn) {
 
 test("scripts parse", shell => {
   for (const name of ["startup", "credentialCheck", "dirCheck", "removeFile", "openUrl", "register", "hash", "notify",
-                      "probePlugins", "hashPlugin", "saveApiKey", "classicUpload",
+                      "probePlugins", "hashPlugin", "saveApiKey", "classicUpload", "prepareUpload", "removeUpload",
                       "agentPrelude", "probeAgents", "probeMcp", "skillLinks", "agentCli", "jsonMcp", "launchAgent",
                       "agentPrompt", "agentMenu", "copyText"]) {
     assert.strictEqual(typeof S[name], "string", name)
@@ -287,9 +287,9 @@ test("probePlugins lists plugin folders with a change stamp", shell => {
   assert.strictEqual(clock[3], "1.2.0")
   assert.strictEqual(clock[4], "Clock", "top-level name, not the nested one")
   assert.strictEqual(clock[5], "dir")
-  assert.ok(/^5 \d+ \d+$/.test(clock[2]), "counts regular files outside .git: " + clock[2])
+  assert.ok(/^[a-f0-9]{64}$/.test(clock[2]), "metadata digest: " + clock[2])
   assert.strictEqual(byId["dev.linked"][5], "link")
-  assert.strictEqual(byId["dev.linked"][2].split(" ")[0], "1", "follows the top-level symlink")
+  assert.ok(/^[a-f0-9]{64}$/.test(byId["dev.linked"][2]), "digest for the top-level symlink")
   const before = clock[2]
   fs.writeFileSync(path.join(p.clock, "BarWidget.qml"), "Item { id: changed }\n")
   r = run(shell, S.probePlugins, [base])
