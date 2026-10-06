@@ -112,3 +112,21 @@ test('URL report links identify the URL by its VirusTotal ID only', () => {
   assert.equal(Model.resultFromReport('domain', 'example.com', { id: 'example.com', last_analysis_stats: {} }, {}).reportUrl,
                'https://www.virustotal.com/gui/domain/example.com')
 })
+
+test('agent docs never put a URL on a command line', () => {
+  // The skill's REST fallback and the docs are run by agents in a shell, so
+  // every shell example must be free of URL placeholders and argv carriers.
+  const base = path.join(__dirname, '..')
+  for (const file of ['agents/skills/virustotal/SKILL.md', 'docs/agents.md', 'README.md']) {
+    const src = fs.readFileSync(path.join(base, file), 'utf8')
+    const blocks = src.match(/```(?:sh|bash|shell)\n[\s\S]*?```/g) || []
+    for (const b of blocks) {
+      assert.doesNotMatch(b, /\bURL\b/, file + ': URL placeholder in a shell example')
+      assert.doesNotMatch(b, /--arg u\b|--data-raw|<</, file + ': argv/heredoc body in a shell example')
+      if (/urls\/lookup/.test(b)) assert.match(b, /--data-binary "@\$f"/, file + ': URL lookups must send a body file')
+    }
+  }
+  const skill = fs.readFileSync(path.join(base, 'agents/skills/virustotal/SKILL.md'), 'utf8')
+  assert.match(skill, /Never put a URL into a command line/)
+  assert.match(skill, /file-writing tool \(not a shell command\)/)
+})
