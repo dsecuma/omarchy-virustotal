@@ -186,7 +186,7 @@ var saveApiKey = [
 // The file travels on stdin so curl -F never parses the local path (';' ',').
 var classicUpload = [
   "[ -f \"$1\" ] && [ -r \"$1\" ] || exit 3",
-  "exec curl -sS --proto =https --connect-timeout 10 --max-time \"${5:-130}\" -A \"$4\" -H \"@$2\" -H 'Accept: application/json' -w '\\n%{http_code}' -F 'file=@-;filename=sample' \"$3\" < \"$1\""
+  "exec curl -sS --proto =https --connect-timeout 10 --max-time \"${5:-130}\" -A \"$4\" -H \"@$2\" -H 'Accept: application/json' -w '\\n%{http_code}\\nretry-after:%header{retry-after}' -F 'file=@-;filename=sample' \"$3\" < \"$1\""
 ].join("\n")
 
 // --- coding agents (AgentsManager.qml) ----------------------------------------

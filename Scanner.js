@@ -95,7 +95,8 @@ function makeLimiter(backendId, overrides, persisted, now) {
   var ks = keys(limits)
   for (var i = 0; i < ks.length; i++) {
     l.used[ks[i]] = restore ? Model.num(p.used[ks[i]]) : 0
-    l.recent[ks[i]] = []
+    var recent = restore && p.recent && Array.isArray(p.recent[ks[i]]) ? p.recent[ks[i]] : []
+    l.recent[ks[i]] = recent.filter(function(t) { return typeof t === "number" && isFinite(t) && t <= now && now - t < MIN_MS }).sort(function(a, b) { return a - b })
   }
   return l
 }
@@ -131,6 +132,8 @@ function waitMs(limiter, cls, now) {
   if ((limiter.used[key] || 0) >= lim.perDay) return Math.max(1000, nextUtcMidnight(now) - now)
   var r = pruneWindow(limiter, key, now)
   if (r.length >= lim.perMin) return Math.max(1, r[0] + MIN_MS - now)
+  // A minute quota is not permission to burst all uploads at once.
+  if (cls === "upload" && r.length) return Math.max(0, r[r.length - 1] + Math.ceil(MIN_MS / lim.perMin) - now)
   return 0
 }
 
@@ -157,14 +160,14 @@ function quotaInfo(limiter, now) {
 }
 
 function persistLimiter(limiter) {
-  return limiter ? { backend: limiter.backend, day: limiter.day, used: Model.copy(limiter.used) } : null
+  return limiter ? { backend: limiter.backend, day: limiter.day, used: Model.copy(limiter.used), recent: Model.copy(limiter.recent) } : null
 }
 
 // --- scheduler ---------------------------------------------------------------
 
 // Tasks: { type: "lookup" | "upload" | "poll", sha, notBefore, attempts, ... }.
 // Polls go first (they finish work already paid for), then lookups, then uploads.
-var PRIORITY = { poll: 0, lookup: 1, upload: 2 }
+var PRIORITY = { receipt: 0, poll: 0, lookup: 1, upload: 2 }
 
 function taskClass(task) {
   return task && task.type === "upload" ? "upload" : "lookup"
@@ -193,6 +196,7 @@ function dispatch(s, now) {
     return (pa === undefined ? 9 : pa) - (pb === undefined ? 9 : pb) || a - b
   })
   var maxParallel = Math.max(1, s.maxParallel || 1)
+  var uploads = s.uploadsInFlight || 0
   var started = {}
   for (var j = 0; j < order.length; j++) {
     if ((s.inFlight || 0) + start.length >= maxParallel) {
@@ -201,6 +205,8 @@ function dispatch(s, now) {
     }
     var idx = order[j]
     var t = queue[idx]
+    // One scanner upload at a time; report lookups still use all other slots.
+    if (t.type === "upload" && uploads >= 1) continue
     if ((t.notBefore || 0) > now) {
       wake(t.notBefore)
       continue
@@ -211,6 +217,7 @@ function dispatch(s, now) {
       continue
     }
     if (s.limiter) take(s.limiter, taskClass(t), now)
+    if (t.type === "upload") uploads++
     start.push(t)
     started[idx] = true
   }
@@ -659,7 +666,7 @@ function classicUploadId(json) {
 }
 
 // Classic API errors ({"error": {"code", "message"}}) -> Model.apiError shape.
-function classicError(http, json, exitCode) {
+function classicError(http, json, exitCode, retryAfter) {
   var err = json && json.error && typeof json.error === "object" ? json.error : {}
   var code = String(err.code || "")
   var message = String(err.message || "")
@@ -672,11 +679,11 @@ function classicError(http, json, exitCode) {
       || code === "ForbiddenError" || code === "UserNotActiveError")
     return { kind: "auth", code: code, retryAfter: 0, message: "VirusTotal rejected the API key. Check it in Settings." }
   if (http === 429 || code === "QuotaExceededError" || code === "TooManyRequestsError")
-    return { kind: "rate_limit", code: code, retryAfter: 60, message: "API key quota reached; waiting before the next request." }
+    return { kind: "rate_limit", code: code, retryAfter: Math.max(60, Model.num(retryAfter)), message: "API key quota reached; waiting before the next request." }
   if (http === 413)
     return { kind: "too_large", code: code, retryAfter: 0, message: "The file is larger than the 32 MB upload limit." }
   if (http >= 500)
-    return { kind: "unavailable", code: code, retryAfter: 0, message: "VirusTotal is temporarily unavailable (HTTP " + http + ")." }
+    return { kind: "unavailable", code: code, retryAfter: Model.num(retryAfter), message: "VirusTotal is temporarily unavailable (HTTP " + http + ")." }
   return { kind: "http", code: code, retryAfter: 0,
            message: (message ? Model.truncate(message, 200) : "The request failed") + " (HTTP " + http + ")." }
 }

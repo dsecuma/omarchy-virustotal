@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.4"
+var DEFAULT_VERSION = "1.1.5"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
@@ -754,16 +754,31 @@ function themeYellow(raw) {
 
 // --- errors ------------------------------------------------------------------
 
-// curl is invoked with -w "\n%{http_code}", so the status is the last line.
-function parseCurlOutput(out) {
+// curl >= 7.84: capture the final response's Retry-After without logging headers.
+var CURL_WRITE_OUT = "\n%{http_code}\nretry-after:%header{retry-after}"
+
+function retryAfterSeconds(value, now) {
+  var s = String(value || "").trim()
+  if (/^\d+$/.test(s)) return num(s)
+  // Reject numeric/ambiguous strings which Date.parse accepts as calendar years.
+  if (!/^[A-Za-z]{3},?\s/.test(s)) return 0
+  var date = Date.parse(s)
+  return isFinite(date) ? Math.max(0, Math.ceil((date - (now === undefined ? Date.now() : now)) / 1000)) : 0
+}
+
+function parseCurlOutput(out, now) {
   var s = String(out || "").replace(/\s+$/, "")
+  var trailer = /\nretry-after:([^\r\n]*)$/.exec(s)
+  if (trailer) s = s.slice(0, trailer.index)
   var idx = s.lastIndexOf("\n")
   var codeText = (idx >= 0 ? s.slice(idx + 1) : s).trim()
   if (!/^\d{3}$/.test(codeText)) return { http: 0, body: s }
-  return { http: parseInt(codeText, 10), body: idx >= 0 ? s.slice(0, idx) : "" }
+  var result = { http: parseInt(codeText, 10), body: idx >= 0 ? s.slice(0, idx) : "" }
+  if (trailer) result.retryAfter = retryAfterSeconds(trailer[1], now)
+  return result
 }
 
-function apiError(http, json, exitCode) {
+function apiError(http, json, exitCode, retryAfter) {
   var d = json && typeof json === "object" ? json.detail : null
   var message = ""
   var retry = 0
@@ -777,6 +792,7 @@ function apiError(http, json, exitCode) {
     code = String(d.code || "")
     retry = num(d.retry_after_seconds) || num(d.retry_after)
   }
+  retry = Math.max(retry, num(retryAfter))
   if (!http) {
     if (exitCode === 127)
       return { kind: "missing_tool", code: code, retryAfter: 0, message: "curl is not installed. Install it and try again." }
@@ -833,11 +849,10 @@ function hashErrorMessage(exitCode, path) {
 
 // --- polling -----------------------------------------------------------------
 
-// Analysis polls: the server hint (>= 5 s) for the first 6 polls, then 10 s,
-// then 15 s. 24 polls cover roughly 4.5 minutes.
+// Local backoff is a minimum; every poll must also respect the server hint.
 function pollDelayMs(polls, nextPollSeconds) {
   var n = Number(polls) || 0
-  var seconds = n < 6 ? Math.max(num(nextPollSeconds) || 5, 5) : (n < 12 ? 10 : 15)
+  var seconds = Math.max(num(nextPollSeconds), n < 6 ? 5 : (n < 12 ? 10 : 15))
   return seconds * 1000
 }
 

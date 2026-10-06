@@ -8,7 +8,7 @@ function task(type = 'upload', hash = sha) {
 function setup() {
   const sent = [], hashes = []
   const root = { active: true, loaded: true, autoUpload: true, backend: 'vtai', _gen: 1, _uploadGen: 0,
-    _queue: [], _busy: {}, _scans: {}, _st: Scanner.parseState(''), inFlight: 0, scanTotal: 0, scanDone: 0 }
+    _queue: [], _busy: {}, _scans: {}, _st: Scanner.parseState(''), inFlight: 0, uploadsInFlight: 0, scanTotal: 0, scanDone: 0 }
   root.service = { hashFile: (p, q, m, cb) => hashes.push(cb), api: (...a) => sent.push(a), sh: (...a) => sent.push(a),
     apiKeyPath: '/fake/key', userAgent: 'test' }
   const timer = { stop() {}, restart() {} }
@@ -65,5 +65,10 @@ test('ready backend switch resumes from current state without another file load'
 })
 test('deactivation still waits for the next state-file load', () => {
   const x = setup(); x.root.active = false; x.root.restart(true); assert.equal(x.root.loaded, false)
+})
+test('an old upload retains its separate slot until its callback finishes', () => {
+  const x = setup(); x.root.run(task()); assert.equal(x.root.uploadsInFlight, 1)
+  x.root.active = false; x.root.restart(); assert.equal(x.root.uploadsInFlight, 1)
+  x.hashes[0](0, 1, sha); assert.equal(x.root.uploadsInFlight, 0)
 })
 console.log(passed + ' lifecycle tests passed')
