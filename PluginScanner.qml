@@ -524,23 +524,30 @@ Item {
       return true
     }
     if (cancelled()) return
-    // Hash again right before sending: the bytes must match the SHA-256.
-    root.service.hashFile(t.path, 0, Model.MAX_UPLOAD_BYTES, function(code, size, sha) {
-      if (cancelled()) return
-      if (code !== 0 || sha !== t.sha) {
-        callback({ exitCode: 0, http: 0, body: "", json: null, changed: true })
+    root.service.prepareUploadFile(t.path, t.sha, function(code, size, snapshot) {
+      if (!root.mayUpload(gen, permission, backendId)) {
+        root.service.removeUploadFile(snapshot)
+        cancelled()
         return
       }
+      if (code !== 0) {
+        callback({ localError: Model.hashErrorMessage(code, t.path), changed: code === 6 })
+        return
+      }
+      function finished(res) {
+        root.service.removeUploadFile(snapshot)
+        callback(res)
+      }
       if (backendId === "classic") {
-        root.service.sh(Scripts.classicUpload, [t.path, root.service.apiKeyPath, Scanner.BACKENDS.classic.base + "/files",
+        root.service.sh(Scripts.classicUpload, [snapshot, root.service.apiKeyPath, Scanner.BACKENDS.classic.base + "/files",
                                                 root.service.userAgent, "130"], 160000, function(c, out) {
           var parsed = Model.parseCurlOutput(out)
-          callback({ exitCode: c, http: parsed.http, body: parsed.body, retryAfter: parsed.retryAfter, json: Model.parseJson(parsed.body) })
+          finished({ exitCode: c, http: parsed.http, body: parsed.body, retryAfter: parsed.retryAfter, json: Model.parseJson(parsed.body) })
         })
         return
       }
       // Standard (non-private) VTAI submission; Service.api adds the consent header.
-      root.request("POST", "/submissions/" + t.sha, { file: t.path, maxTime: 130 }, callback)
+      root.request("POST", "/submissions/" + t.sha, { file: snapshot, maxTime: 130 }, finished)
     })
   }
 
@@ -630,8 +637,8 @@ Item {
       root.release(t.sha)
       return
     }
-    if (res.changed) {
-      root.setEntry(t.sha, Scanner.errorEntry("The file changed before the upload.", now, root._st.cache[t.sha]))
+    if (res.changed || res.localError) {
+      root.setEntry(t.sha, Scanner.errorEntry(res.localError || "The file changed before the upload.", now, root._st.cache[t.sha]))
       root.release(t.sha)
       folderDebounce.restart()
       return
