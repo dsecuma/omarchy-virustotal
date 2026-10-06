@@ -100,7 +100,12 @@ it with `-H @file`, so the token never appears in a command line.
 - Check values before they go into a URL: a hash is 32, 40 or 64 hex
   characters; a domain is letters, digits, dots and hyphens; an IP address
   is IPv4 or IPv6 without port, brackets or prefix length. Do not send
-  anything else. URLs travel in a JSON body built with `jq`.
+  anything else.
+- Never put a URL into a command line, not even quoted, in a heredoc or as a
+  `jq --arg` / `printf` / `echo` argument. Other users on the machine can read
+  command lines, and a URL's path, query or fragment can hold a private token.
+  For URLs prefer the MCP `get_url_report` tool. Over REST, the URL only
+  travels in a request-body file (see "URL" below).
 
 Each command is complete on its own, because agents often run every command
 in a fresh shell. Replace the upper-case placeholders.
@@ -110,13 +115,6 @@ in a fresh shell. Replace the upper-case placeholders.
 curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
   -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
   "https://ai.virustotal.com/api/v3/files/HASH"
-
-# URL (the URL goes into a JSON body, never into the command line as-is)
-jq -n --arg u 'URL' '{url: $u}' |
-  curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
-    -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
-    -H 'Content-Type: application/json' --data @- \
-    "https://ai.virustotal.com/api/v3/urls/lookup"
 
 # Domain
 curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
@@ -138,6 +136,28 @@ curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
   -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
   "https://ai.virustotal.com/api/v3/agents/me/access"
 ```
+
+### URL
+
+The URL must not appear in any command. Use the MCP tools if you can.
+Otherwise:
+
+1. With your file-writing tool (not a shell command), create
+   `$XDG_RUNTIME_DIR/vt-url-lookup.json` containing exactly
+   `{"url": "URL"}`. Write `"` inside the URL as `\"` and `\` as `\\`.
+   `$XDG_RUNTIME_DIR` (usually `/run/user/<uid>`) is private to the user.
+   If it is not set, or you have no file-writing tool, do not look the URL up
+   over REST: ask the user to check it in the VirusTotal panel instead.
+2. Run this command unchanged. It sends the file and deletes it:
+
+```sh
+f="${XDG_RUNTIME_DIR:?}/vt-url-lookup.json"; curl -sS --proto =https --max-time 40 -w '\n%{http_code}\n' \
+  -H "@${XDG_CONFIG_HOME:-$HOME/.config}/vtai/auth.header" \
+  -H 'Content-Type: application/json' --data-binary "@$f" \
+  "https://ai.virustotal.com/api/v3/urls/lookup"; rm -f -- "$f"
+```
+
+### Status
 
 The last line of the output is the HTTP status:
 

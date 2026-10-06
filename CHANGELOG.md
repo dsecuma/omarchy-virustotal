@@ -2,6 +2,11 @@
 
 What changed in each version of the plugin. The version is the one in `manifest.json`.
 
+## 1.1.10 – 2026-10-06
+
+- `virustotal` skill: the REST fallback no longer puts a URL on a command line (`jq --arg u 'URL'` was readable by other local users). Agents look URLs up through the MCP tool, or write the request body to `$XDG_RUNTIME_DIR/vt-url-lookup.json` with their file-writing tool and send it with `curl --data-binary @file`, which then deletes it. Without either, the agent asks you to check the URL in the panel. The skill now forbids URLs in commands of any kind (quoted, heredoc, `jq --arg`, `printf`, `echo`).
+- Add a regression that checks no shell example in the skill or the docs carries a URL placeholder, `--arg`, a heredoc or `--data-raw`.
+
 ## 1.1.9 – 2026-10-06
 
 - Keep checked URLs out of process command lines, which other local users can read. The URL lookup body now reaches curl on stdin (`--data-binary @-`) instead of `--data-raw`, so a token in a URL's path, query or fragment is only shared with VirusTotal.

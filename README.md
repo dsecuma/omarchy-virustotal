@@ -181,6 +181,7 @@ Agents marked **Manual setup** need one step by hand: their row shows it, **Copy
 [`agents/skills/virustotal/SKILL.md`](agents/skills/virustotal/SKILL.md) tells an agent how to query VirusTotal, how to read a report and what to tell you:
 
 - It uses the MCP tools when the agent has them, otherwise REST lookups with the plugin's token file (`curl -H @file`, never printed), otherwise it asks you to connect.
+- A URL never goes into a command line, where other local users could read it. The agent uses the MCP tool, or writes the request body to a file in the private `$XDG_RUNTIME_DIR` with its file tool and sends that file. Without either, it asks you to check the URL in the panel.
 - Lookups only: a file is identified by its hash and never opened, run or unpacked, and defanged URLs are not visited.
 - It repeats VirusTotal's numbers and never calls something "clean" or "safe".
 - Uploads are public, so the agent submits something only when you ask for it in the conversation, after a reminder.
