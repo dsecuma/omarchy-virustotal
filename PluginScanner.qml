@@ -62,6 +62,7 @@ Item {
   property var _busy: ({})
   property var _limiter: null
   property int _gen: 0
+  property int _uploadGen: 0
   property var _hashQueue: []
   property var _scans: ({})
   property bool _probing: false
@@ -70,17 +71,18 @@ Item {
   property bool _folderTried: false
 
   onActiveChanged: root.restart()
-  onBackendChanged: root.restart()
+  onBackendChanged: root.restart(true)
   onClassicPerMinChanged: root.rebuildLimiter()
   onClassicPerDayChanged: root.rebuildLimiter()
   onMaxParallelChanged: root.pump()
-  onAutoUploadChanged: if (root.active && root.loaded && root.autoUpload) root.topUp(false)
+  onAutoUploadChanged: root.uploadPermissionChanged()
 
   // ===========================================================================
   // Lifecycle and persistence
   // ===========================================================================
 
-  function restart() {
+  function restart(reuseState) {
+    var resume = reuseState === true && root.active && root.loaded
     if (root.loaded) root.saveNow()
     root._gen++
     root._queue = []
@@ -100,6 +102,40 @@ Item {
     // Reloaded from disk when the scanner becomes active again.
     root.loaded = false
     root.updateCounters()
+    // A ready-to-ready backend switch does not change FileView.path, so no
+    // loaded signal follows it. Keep the latest in-memory cache and rebuild
+    // the backend-specific limiter instead of waiting for a nonexistent load.
+    if (resume) {
+      root._limiter = null
+      root.rebuildLimiter()
+      root.loaded = true
+      root.refreshUi()
+      root.probe()
+    }
+  }
+
+  function dropQueuedUploads() {
+    var keep = []
+    for (var i = 0; i < root._queue.length; i++) {
+      var t = root._queue[i]
+      if (t.type === "upload") root.release(t.sha)
+      else keep.push(t)
+    }
+    root._queue = keep
+  }
+
+  function uploadPermissionChanged() {
+    // Also invalidate an off/on cycle while an earlier hash is still running.
+    root._uploadGen++
+    if (!root.autoUpload) root.dropQueuedUploads()
+    if (!root.active || !root.loaded) return
+    if (root.autoUpload) root.topUp(false)
+    else root.afterTask()
+  }
+
+  function mayUpload(gen, permission, backendId) {
+    return root.active && root.loaded && root.autoUpload && !!root.service
+      && gen === root._gen && permission === root._uploadGen && backendId === root.backend
   }
 
   FileView {
@@ -373,6 +409,7 @@ Item {
 
   function pump() {
     if (!root.active || !root.loaded || !root._limiter || !root.service) return
+    if (!root.autoUpload) root.dropQueuedUploads()
     var now = Date.now()
     if (root.pauseUntil <= now) root.pauseReason = ""
     var s = { queue: root._queue, inFlight: root.inFlight, maxParallel: root.maxParallel,
@@ -446,6 +483,10 @@ Item {
   }
 
   function run(t) {
+    if (t.type === "upload" && !root.mayUpload(root._gen, root._uploadGen, root.backend)) {
+      root.release(t.sha)
+      return
+    }
     root.inFlight++
     var gen = root._gen
     function done(handler) {
@@ -467,13 +508,23 @@ Item {
   }
 
   function upload(t, callback) {
+    var gen = root._gen
+    var permission = root._uploadGen
+    var backendId = root.backend
+    function cancelled() {
+      if (root.mayUpload(gen, permission, backendId)) return false
+      callback({ cancelled: true })
+      return true
+    }
+    if (cancelled()) return
     // Hash again right before sending: the bytes must match the SHA-256.
     root.service.hashFile(t.path, 0, Model.MAX_UPLOAD_BYTES, function(code, size, sha) {
+      if (cancelled()) return
       if (code !== 0 || sha !== t.sha) {
         callback({ exitCode: 0, http: 0, body: "", json: null, changed: true })
         return
       }
-      if (root.backend === "classic") {
+      if (backendId === "classic") {
         root.service.sh(Scripts.classicUpload, [t.path, root.service.apiKeyPath, Scanner.BACKENDS.classic.base + "/files",
                                                 root.service.userAgent, "130"], 160000, function(c, out) {
           var parsed = Model.parseCurlOutput(out)
@@ -564,6 +615,10 @@ Item {
 
   function onUpload(t, res) {
     var now = Date.now()
+    if (res.cancelled) {
+      root.release(t.sha)
+      return
+    }
     if (res.changed) {
       root.setEntry(t.sha, Scanner.errorEntry("The file changed before the upload.", now, root._st.cache[t.sha]))
       root.release(t.sha)

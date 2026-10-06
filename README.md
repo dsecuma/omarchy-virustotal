@@ -316,6 +316,7 @@ When the panel opens, the Scan tab's text field has focus: type, then press <kbd
 node tests/model.test.js     # pure logic in Model.js
 node tests/scripts.test.js   # shell snippets in Scripts.js (sh, bash and dash, with fake curl and agent commands)
 node tests/scanner.test.js   # plugin scanner logic in Scanner.js (rate limiter, scheduler, diffing)
+node tests/lifecycle.test.js # QML controller methods with deferred callbacks (no desktop required)
 node tests/agents.test.js    # agents logic in Agents.js (agent table, probe parsers, record, hand-off prompt)
 qmllint -I "$OMARCHY_PATH/shell" *.qml
 "$OMARCHY_PATH/bin/omarchy-plugin-validate" .

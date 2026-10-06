@@ -9,7 +9,7 @@ var MAX_UPLOAD_BYTES = 32000000        // VTAI /submissions limit
 var MAX_WATCH_BYTES = 1073741824       // watcher skips files above 1 GiB
 var HISTORY_LIMIT = 50
 var DEDUPE_WINDOW_MS = 60000
-var DEFAULT_VERSION = "1.1.3"
+var DEFAULT_VERSION = "1.1.4"
 var AGENT_FAMILY = "omarchy"
 var AGENT_DISPLAY_NAME = "Omarchy VirusTotal"
 
